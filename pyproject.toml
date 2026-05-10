@@ -14,6 +14,7 @@ dependencies = [
     "web3>=7.6",                # ethereum interaction
     "sqlalchemy>=2.0",          # ORM
     "alembic>=1.14",            # DB migrations
+    "pydantic-settings>=2.6",   # .env → typed settings
     "apscheduler>=3.10",        # in-process cron
     "python-dotenv>=1.0",
     "httpx>=0.27",              # async http client (Hermes / IPFS pinning)
