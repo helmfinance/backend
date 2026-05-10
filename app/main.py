@@ -19,8 +19,12 @@ FE workflow (see docs/frontend/openapi-typegen.md):
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 
+from app import converters
 from app.config import settings
+from app.db import get_db
+from app.repos import agents as agent_repo
 from app.schemas import (
     AgentDetail, AgentPhase, AgentSummary, ApiError, ApiErrorCode, AssetClass,
     ContractAddresses, Decision, DecisionType, FeeRates, HealthResponse,
@@ -31,6 +35,21 @@ from app.schemas import (
 )
 from app.utils.addresses import addr_or_zero
 from app.utils.cache import cache_for
+
+
+_AUTO_GRANULARITY: dict[NavPeriod, NavGranularity] = {
+    NavPeriod.H24: NavGranularity.Hour,
+    NavPeriod.D7: NavGranularity.Hour,
+    NavPeriod.D30: NavGranularity.Day,
+    NavPeriod.All: NavGranularity.Day,
+}
+
+
+def _api_error(status: int, code: ApiErrorCode, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status,
+        detail=ApiError(error=code, message=message).model_dump(by_alias=True),
+    )
 
 app = FastAPI(
     title="Helm Backend",
@@ -65,6 +84,7 @@ def _todo() -> None:
 @app.get(
     "/agents",
     response_model=Page[AgentSummary],
+    dependencies=[Depends(cache_for(15))],
     summary="List agents (marketplace)",
     tags=["agents"],
 )
@@ -76,24 +96,61 @@ def list_agents(
     order: str = Query("desc", description="asc|desc"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
 ):
-    _todo()
+    rows, total = agent_repo.list_agents(
+        db,
+        phase=phase,
+        asset_class=asset_class,
+        lockup=lockup,
+        sort=sort,
+        order=order,
+        limit=limit,
+        offset=offset,
+    )
+    items = [
+        converters.to_agent_summary(
+            a,
+            current_nav=agent_repo.get_latest_nav(db, a.agent_id),
+            apy_30d_bps=agent_repo.compute_apy_bps(db, a.agent_id, 30),
+            apy_7d_bps=agent_repo.compute_apy_bps(db, a.agent_id, 7),
+            holder_count=agent_repo.compute_holder_count(db, a.agent_id),
+        )
+        for a in rows
+    ]
+    return Page[AgentSummary](items=items, total=total, limit=limit, offset=offset)
 
 
 @app.get(
     "/agents/{agent_id}",
     response_model=AgentDetail,
     responses={404: {"model": ApiError}},
+    dependencies=[Depends(cache_for(10))],
     summary="Agent detail",
     tags=["agents"],
 )
-def get_agent(agent_id: int):
-    _todo()
+def get_agent(agent_id: int, db: Session = Depends(get_db)):
+    a = agent_repo.get_agent(db, agent_id)
+    if a is None:
+        raise _api_error(404, ApiErrorCode.NotFound, f"Agent {agent_id} not found")
+    return converters.to_agent_detail(
+        a,
+        current_nav=agent_repo.get_latest_nav(db, agent_id),
+        apy_30d_bps=agent_repo.compute_apy_bps(db, agent_id, 30),
+        apy_7d_bps=agent_repo.compute_apy_bps(db, agent_id, 7),
+        holder_count=agent_repo.compute_holder_count(db, agent_id),
+        recent_dividends=agent_repo.get_recent_dividends(db, agent_id),
+        recent_decisions=agent_repo.get_recent_decisions(db, agent_id),
+        latest_narrator_note=agent_repo.get_latest_narrator_note(db, agent_id),
+        redemption_queue=agent_repo.get_redemption_queue_snapshot(db, agent_id),
+    )
 
 
 @app.get(
     "/agents/{agent_id}/nav-history",
     response_model=NavHistoryResponse,
+    responses={400: {"model": ApiError}, 404: {"model": ApiError}},
+    dependencies=[Depends(cache_for(30))],
     summary="NAV time series",
     tags=["agents"],
 )
@@ -101,8 +158,23 @@ def get_nav_history(
     agent_id: int,
     period: NavPeriod = Query(NavPeriod.D7),
     granularity: NavGranularity | None = Query(None),
+    db: Session = Depends(get_db),
 ):
-    _todo()
+    if granularity == NavGranularity.Minute and period != NavPeriod.H24:
+        raise _api_error(
+            400,
+            ApiErrorCode.BadRequest,
+            "minute granularity only valid for period=24h",
+        )
+    if agent_repo.get_agent(db, agent_id) is None:
+        raise _api_error(404, ApiErrorCode.NotFound, f"Agent {agent_id} not found")
+
+    actual = granularity or _AUTO_GRANULARITY[period]
+    points = [
+        converters.to_nav_point(p)
+        for p in agent_repo.get_nav_history(db, agent_id, period)
+    ]
+    return NavHistoryResponse(points=points, period=period, granularity=actual)
 
 
 @app.get(
