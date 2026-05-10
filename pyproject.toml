@@ -1,0 +1,46 @@
+[project]
+name = "helm-backend"
+version = "0.1.0"
+description = "Helm — AI Agent ETF on Mantle. FastAPI + Pydantic v2 + web3.py."
+requires-python = ">=3.11"
+readme = "README.md"
+license = {text = "MIT"}
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "anthropic>=0.39",          # Claude Sonnet 4.6 — mandate parser, narrator
+    "web3>=7.6",                # ethereum interaction
+    "sqlalchemy>=2.0",          # ORM
+    "alembic>=1.14",            # DB migrations
+    "apscheduler>=3.10",        # in-process cron
+    "python-dotenv>=1.0",
+    "httpx>=0.27",              # async http client (Hermes / IPFS pinning)
+    "eth-account>=0.13",        # signer for cron tx
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+    "black>=24.10",
+    "mypy>=1.13",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]  # line length handled by black
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
