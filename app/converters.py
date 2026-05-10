@@ -202,6 +202,80 @@ def to_agent_detail(
     )
 
 
+def to_portfolio_position(
+    h: db_models.Holder,
+    *,
+    value_usdc: str,
+    total_user_value_usdc: str,
+) -> schemas.PortfolioPosition:
+    total = int(total_user_value_usdc)
+    weight_bps = (int(value_usdc) * 10000) // total if total > 0 else 0
+    return schemas.PortfolioPosition(
+        agent_id=h.agent_id,
+        agent_name=h.agent.name,
+        ticker=h.agent.ticker,
+        vault_address=h.agent.vault_address,
+        token_address=h.agent.token_address,
+        shares=h.balance,
+        weight_bps=weight_bps,
+        value_usdc=value_usdc,
+        cost_basis_usdc=None,
+        unrealized_pnl_usdc=None,
+    )
+
+
+def to_dividend_claim_aggregate(
+    agent: db_models.Agent,
+    claims: list[db_models.DividendClaim],
+    epochs_by_num: dict[int, db_models.DividendEpoch],
+) -> schemas.DividendClaim:
+    return schemas.DividendClaim(
+        agent_id=agent.agent_id,
+        agent_name=agent.name,
+        ticker=agent.ticker,
+        claimable_epochs=sorted(c.epoch for c in claims),
+        claimable_amount_usdc=str(sum(int(c.amount_usdc) for c in claims)),
+        oldest_epoch_at=min(epochs_by_num[c.epoch].distributed_at for c in claims),
+    )
+
+
+def to_redemption_request(
+    r: db_models.RedemptionRequest,
+    *,
+    now: int,
+) -> schemas.RedemptionRequest:
+    """Pending + unlock_at <= now → Claimable in the response shape."""
+    status = r.status
+    if status == "Pending" and r.unlock_at <= now:
+        status = "Claimable"
+    return schemas.RedemptionRequest(
+        request_id=r.request_id,
+        agent_id=r.agent_id,
+        agent_name=r.agent.name,
+        shares=r.shares,
+        tier=schemas.LockupTier(r.tier),
+        unlock_at=r.unlock_at,
+        estimated_usdc=r.estimated_usdc,
+        status=schemas.RedemptionStatus(status),
+    )
+
+
+def to_founder_vault_position(
+    fv: db_models.FounderVault,
+) -> schemas.FounderVaultPosition:
+    return schemas.FounderVaultPosition(
+        agent_id=fv.agent_id,
+        agent_name=fv.agent.name,
+        vault_address=fv.agent.vault_address,
+        founder_vault_address=fv.address,
+        shares_locked=fv.shares_held,
+        lockup_ends_at=fv.lockup_ends_at,
+        carry_balance_usdc=fv.carry_balance_usdc,
+        cumulative_withdrawn_bps=fv.cumulative_withdrawn_bps,
+        is_subordination_active=fv.is_subordination_active,
+    )
+
+
 __all__ = [
     "to_position",
     "to_nav_point",
@@ -212,4 +286,8 @@ __all__ = [
     "to_wind_down_state",
     "to_agent_summary",
     "to_agent_detail",
+    "to_portfolio_position",
+    "to_dividend_claim_aggregate",
+    "to_redemption_request",
+    "to_founder_vault_position",
 ]

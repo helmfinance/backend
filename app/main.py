@@ -17,6 +17,8 @@ FE workflow (see docs/frontend/openapi-typegen.md):
     pnpm gen-types  # → src/lib/api-types.gen.ts
 """
 
+import time
+
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -25,6 +27,7 @@ from app import converters
 from app.config import settings
 from app.db import get_db
 from app.repos import agents as agent_repo
+from app.repos import portfolio as portfolio_repo
 from app.schemas import (
     AgentDetail, AgentPhase, AgentSummary, ApiError, ApiErrorCode, AssetClass,
     ContractAddresses, Decision, DecisionType, FeeRates, HealthResponse,
@@ -242,21 +245,63 @@ def validate_mandate(req: MandateValidateRequest):
 @app.get(
     "/portfolio/{address}",
     response_model=PortfolioResponse,
+    dependencies=[Depends(cache_for(10))],
     summary="Per-wallet portfolio aggregate",
     tags=["portfolio"],
 )
-def get_portfolio(address: str):
-    _todo()
+def get_portfolio(address: str, db: Session = Depends(get_db)):
+    addr = address.lower()
+    now = int(time.time())
+
+    holdings = portfolio_repo.get_holdings_by_address(db, addr)
+    redemption_rows = portfolio_repo.get_redemption_requests_by_address(db, addr)
+    founder_vaults = portfolio_repo.get_founder_vaults_by_address(db, addr)
+    dividend_groups = portfolio_repo.get_pending_dividends_grouped(db, addr)
+
+    position_values = [
+        portfolio_repo.get_position_value_usdc(db, h.agent_id, h.balance)
+        for h in holdings
+    ]
+    total_value = sum(int(v) for v in position_values)
+
+    positions = [
+        converters.to_portfolio_position(
+            h, value_usdc=v, total_user_value_usdc=str(total_value)
+        )
+        for h, v in zip(holdings, position_values)
+    ]
+    pending_dividends = [
+        converters.to_dividend_claim_aggregate(agent, claims, epochs)
+        for agent, claims, epochs in dividend_groups
+    ]
+    pending_redemptions = [
+        converters.to_redemption_request(r, now=now) for r in redemption_rows
+    ]
+    founder_vault_positions = [
+        converters.to_founder_vault_position(fv) for fv in founder_vaults
+    ]
+
+    return PortfolioResponse(
+        total_value_usdc=str(total_value),
+        positions=positions,
+        pending_dividends=pending_dividends,
+        pending_redemptions=pending_redemptions,
+        founder_vaults=founder_vault_positions,
+    )
 
 
 @app.get(
     "/redemptions/{address}",
     response_model=list[RedemptionRequest],
+    dependencies=[Depends(cache_for(15))],
     summary="Pending redemption requests for a wallet",
     tags=["portfolio"],
 )
-def get_redemptions(address: str):
-    _todo()
+def get_redemptions(address: str, db: Session = Depends(get_db)):
+    addr = address.lower()
+    now = int(time.time())
+    rows = portfolio_repo.get_redemption_requests_by_address(db, addr)
+    return [converters.to_redemption_request(r, now=now) for r in rows]
 
 
 # ─── System ──────────────────────────────────────────────────────────────────

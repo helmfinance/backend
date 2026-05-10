@@ -151,7 +151,7 @@ def _seed_agent1(db, now: int) -> None:
         agent_id=1,
         name=mandate["name"],
         ticker=mandate["ticker"],
-        founder_address=addr("agent:1:founder"),
+        founder_address="0x" + "0" * 36 + "f001",
         vault_address=addr("agent:1:vault"),
         token_address=addr("agent:1:token"),
         founder_vault_address=addr("agent:1:foundervault"),
@@ -264,15 +264,14 @@ def _seed_agent1(db, now: int) -> None:
         )
     )
 
-    # 3 holders + 3 claims
+    # 3 holders + 3 claims (test wallets used by /portfolio gates)
     holder_specs = [
-        ("agent:1:holder:alice", 5000, 500_000),  # 50% weight, 50k claim
-        ("agent:1:holder:bob",   3000, 300_000),
-        ("agent:1:holder:carol", 2000, 200_000),
+        ("0x" + "11" * 20, 5000, 500_000),  # 50% weight, 50k claim
+        ("0x" + "22" * 20, 3000, 300_000),
+        ("0x" + "33" * 20, 2000, 200_000),
     ]
     holder_first_at = public_launch_at + 86400
-    for seed_name, weight_bps, claim_units in holder_specs:
-        h_addr = addr(seed_name)
+    for h_addr, weight_bps, claim_units in holder_specs:
         balance = total_shares * weight_bps // 10000
         db.add(
             Holder(
@@ -292,6 +291,32 @@ def _seed_agent1(db, now: int) -> None:
                 amount_usdc=str(claim_units * USDC // 1000 * 1000),  # cosmetic
                 claimed=False,
                 claimed_at=None,
+            )
+        )
+
+    # Redemption requests (drives /portfolio + /redemptions gates)
+    redemption_specs = [
+        # (request_id, holder, shares, requested_offset_d, status, claim_offset_d)
+        (1, "0x" + "11" * 20, 100 * SHARES, -5,  "Pending", None),
+        (2, "0x" + "22" * 20, 200 * SHARES, -35, "Pending", None),
+        (3, "0x" + "33" * 20, 50  * SHARES, -60, "Claimed", -25),
+    ]
+    for rid, h_addr, shares, req_off_d, status, claim_off_d in redemption_specs:
+        requested_at = now + req_off_d * 86400
+        unlock_at = requested_at + 30 * 86400
+        estimated = shares * nav_per_share // SHARES
+        db.add(
+            RedemptionRequest(
+                request_id=rid,
+                agent_id=1,
+                holder_address=h_addr,
+                shares=str(shares),
+                tier="30d",
+                requested_at=requested_at,
+                unlock_at=unlock_at,
+                estimated_usdc=str(estimated),
+                status=status,
+                claimed_at=(now + claim_off_d * 86400) if claim_off_d is not None else None,
             )
         )
 
