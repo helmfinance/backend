@@ -64,7 +64,7 @@ class Agent(Base):
     positions: Mapped[list["Position"]] = relationship(
         back_populates="agent", cascade="all, delete-orphan"
     )
-    nav_points: Mapped[list["NavPoint"]] = relationship(
+    nav_history: Mapped[list["NavPoint"]] = relationship(
         back_populates="agent", cascade="all, delete-orphan"
     )
     decisions: Mapped[list["Decision"]] = relationship(
@@ -135,7 +135,7 @@ class NavPoint(Base):
     nav_per_share_usdc: Mapped[str] = mapped_column(String, nullable=False)
     total_shares: Mapped[str] = mapped_column(String, nullable=False)
 
-    agent: Mapped["Agent"] = relationship(back_populates="nav_points")
+    agent: Mapped["Agent"] = relationship(back_populates="nav_history")
 
     __table_args__ = (
         Index("ix_nav_history_agent_id_timestamp", "agent_id", "timestamp"),

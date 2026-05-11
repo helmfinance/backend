@@ -139,7 +139,7 @@ def generate_note(
         key=lambda d: d.timestamp,
     )
 
-    nav_rows = sorted(agent.nav_points, key=lambda n: n.timestamp)
+    nav_rows = sorted(agent.nav_history, key=lambda n: n.timestamp)
     if not nav_rows:
         return None
 
