@@ -260,6 +260,16 @@ def to_redemption_request(
     )
 
 
+def to_synthetic_price_preview(p: dict) -> schemas.SyntheticPricePreview:
+    """p is a `HermesPrice` TypedDict from app.hermes.client."""
+    return schemas.SyntheticPricePreview(
+        symbol=p["symbol"],
+        price_usdc=p["price_usdc"],
+        pyth_confidence=p["confidence"],
+        fresh_at=p["publish_time"],
+    )
+
+
 def to_founder_vault_position(
     fv: db_models.FounderVault,
 ) -> schemas.FounderVaultPosition:
@@ -289,5 +299,6 @@ __all__ = [
     "to_portfolio_position",
     "to_dividend_claim_aggregate",
     "to_redemption_request",
+    "to_synthetic_price_preview",
     "to_founder_vault_position",
 ]

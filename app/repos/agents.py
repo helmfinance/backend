@@ -13,6 +13,7 @@ from app.db.models import (
     Holder,
     NarratorNote,
     NavPoint,
+    Position,
     RedemptionRequest,
     WindDownState,
 )
@@ -221,6 +222,29 @@ def get_nav_history(
     return list(db.execute(stmt).scalars())
 
 
+def get_pyth_feeds_for_agent(
+    db: Session, agent_id: int
+) -> list[tuple[str, str]]:
+    """[(symbol, feed_id), ...] for positions backed by a Pyth feed.
+
+    mETH / USDY positions are skipped (no Pyth feed). Order follows the row
+    order in `positions` so callers can zip with updateData deterministically.
+    """
+    from app.hermes.client import FEED_BY_SYMBOL
+
+    positions = list(
+        db.execute(
+            select(Position).where(Position.agent_id == agent_id)
+        ).scalars()
+    )
+    out: list[tuple[str, str]] = []
+    for p in positions:
+        feed = FEED_BY_SYMBOL.get(p.symbol)
+        if feed:
+            out.append((p.symbol, feed))
+    return out
+
+
 __all__ = [
     "FounderVault",
     "WindDownState",
@@ -234,4 +258,5 @@ __all__ = [
     "compute_apy_bps",
     "compute_holder_count",
     "get_nav_history",
+    "get_pyth_feeds_for_agent",
 ]

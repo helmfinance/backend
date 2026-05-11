@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     # --- IPFS pinning ---
     ipfs_pin_provider: str = "web3storage"
     web3_storage_token: str = ""
+    pinata_jwt: str = ""
 
     # --- Pyth ---
     pyth_hermes_url: str = "https://hermes.pyth.network"

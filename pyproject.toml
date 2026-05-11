@@ -19,6 +19,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "httpx>=0.27",              # async http client (Hermes / IPFS pinning)
     "eth-account>=0.13",        # signer for cron tx
+    "slowapi>=0.1.9",           # per-IP rate limiting for /mandate/parse
 ]
 
 [project.optional-dependencies]

@@ -19,19 +19,30 @@ FE workflow (see docs/frontend/openapi-typegen.md):
 
 import time
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+import anthropic
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import ValidationError
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from app import converters
 from app.config import settings
+from app.converters import to_synthetic_price_preview
 from app.db import get_db
+from app.hermes import client as hermes_client
+from app.mandate import parser, rules
+from app.mandate.hash import compute_mandate_hash
+from app.mandate.ipfs import pin_mandate
 from app.repos import agents as agent_repo
+from app.repos import mandates as mandates_repo
 from app.repos import portfolio as portfolio_repo
 from app.schemas import (
     AgentDetail, AgentPhase, AgentSummary, ApiError, ApiErrorCode, AssetClass,
     ContractAddresses, Decision, DecisionType, FeeRates, HealthResponse,
-    LockupTier, MandateParseRequest, MandateParseResponse,
+    LockupTier, MandateParseRequest, MandateParseResponse, MandateSchema,
     MandateValidateRequest, MandateValidateResponse, MintPreviewRequest,
     MintPreviewResponse, NavGranularity, NavHistoryResponse, NavPeriod, Page,
     PortfolioResponse, PythUpdateBytesResponse, RedemptionRequest, SystemInfo,
@@ -61,6 +72,11 @@ app = FastAPI(
     contact={"name": "Helm team"},
     license_info={"name": "MIT"},
 )
+
+# Per-IP rate limiter (in-memory; single-instance MVP).
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS — open during hackathon, tighten before public deploy.
 app.add_middleware(
@@ -198,12 +214,133 @@ def list_agent_decisions(
 @app.post(
     "/agents/{agent_id}/mint-preview",
     response_model=MintPreviewResponse,
-    responses={400: {"model": ApiError}, 404: {"model": ApiError}},
+    responses={
+        400: {"model": ApiError},
+        404: {"model": ApiError},
+        503: {"model": ApiError},
+    },
     summary="Preview shares received for a USDC mint amount (see ADR D002)",
     tags=["agents"],
 )
-def mint_preview(agent_id: int, req: MintPreviewRequest):
-    _todo()
+def mint_preview(
+    agent_id: int,
+    req: MintPreviewRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    response.headers["Cache-Control"] = "no-store"
+
+    # 1. Amount validation
+    try:
+        amount = int(req.amount_usdc)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(
+            400,
+            detail=ApiError(
+                error=ApiErrorCode.BadRequest,
+                message="amountUsdc must be a decimal integer string",
+            ).model_dump(by_alias=True),
+        ) from e
+    if amount <= 0:
+        raise HTTPException(
+            400,
+            detail=ApiError(
+                error=ApiErrorCode.BadRequest,
+                message="amountUsdc must be > 0",
+            ).model_dump(by_alias=True),
+        )
+
+    # 2. Agent + positions
+    agent = agent_repo.get_agent(db, agent_id)
+    if agent is None:
+        raise HTTPException(
+            404,
+            detail=ApiError(
+                error=ApiErrorCode.NotFound,
+                message=f"Agent {agent_id} not found",
+            ).model_dump(by_alias=True),
+        )
+
+    # 3. Minimum deposit (mandate is stored snake_case in DB)
+    min_deposit = int(
+        agent.mandate.get("minimum_deposit_usdc")
+        or agent.mandate.get("minimumDepositUsdc")
+        or "0"
+    )
+    if amount < min_deposit:
+        raise HTTPException(
+            400,
+            detail=ApiError(
+                error=ApiErrorCode.BadRequest,
+                message=f"amountUsdc ({amount}) below minimumDepositUsdc ({min_deposit})",
+            ).model_dump(by_alias=True),
+        )
+
+    # 4. Pyth feeds for this agent
+    feeds = agent_repo.get_pyth_feeds_for_agent(db, agent_id)
+    feed_ids = [f[1] for f in feeds]
+
+    # 5. Hermes fetch
+    try:
+        update_data, parsed_prices = hermes_client.fetch_price_updates(feed_ids)
+    except hermes_client.HermesTimeout as e:
+        raise HTTPException(
+            503,
+            detail=ApiError(
+                error=ApiErrorCode.ChainUnreachable,
+                message="Hermes timeout",
+            ).model_dump(by_alias=True),
+        ) from e
+    except hermes_client.HermesError as e:
+        raise HTTPException(
+            503,
+            detail=ApiError(
+                error=ApiErrorCode.ChainUnreachable,
+                message=f"Hermes unavailable: {e}",
+            ).model_dump(by_alias=True),
+        ) from e
+
+    # 6. NAV with fresh prices (synthetic-equity positions only)
+    price_by_symbol = {p["symbol"]: int(p["price_usdc"]) for p in parsed_prices}
+    total_value = 0
+    for pos in agent.positions:
+        if pos.symbol in price_by_symbol:
+            old_price = int(pos.price_usdc or "0")
+            new_price = price_by_symbol[pos.symbol]
+            if old_price > 0:
+                total_value += int(pos.value_usdc) * new_price // old_price
+            else:
+                total_value += int(pos.value_usdc)
+        else:
+            total_value += int(pos.value_usdc)
+
+    # 7. NAV per share (first mint = 1.0 USDC anchor)
+    latest_nav = agent_repo.get_latest_nav(db, agent_id)
+    total_shares = int(latest_nav.total_shares) if latest_nav else 0
+    if total_shares == 0:
+        nav_per_share = 1_000_000
+    else:
+        nav_per_share = total_value * 10**18 // total_shares
+        if nav_per_share == 0:
+            nav_per_share = 1_000_000
+
+    # 8. Fee + shares
+    mint_fee = amount * settings.mint_fee_bps // 10000
+    net_amount = amount - mint_fee
+    shares = net_amount * 10**18 // nav_per_share
+
+    # 9. Pyth submission fee estimate (per parsed feed, not per VAA blob)
+    pyth_fee_wei = hermes_client.estimate_pyth_fee_wei(len(feed_ids))
+
+    return MintPreviewResponse(
+        amount_usdc=req.amount_usdc,
+        shares=str(shares),
+        nav_at_preview=str(nav_per_share),
+        platform_fee_usdc=str(mint_fee),
+        pyth_fee_mnt_wei=pyth_fee_wei,
+        valid_until=int(time.time()) + 60,
+        synthetic_prices=[to_synthetic_price_preview(p) for p in parsed_prices],
+    )
 
 
 @app.get(
@@ -213,21 +350,155 @@ def mint_preview(agent_id: int, req: MintPreviewRequest):
     summary="Pyth update bytes needed for this agent's mint/burn TX (see ADR D001)",
     tags=["agents"],
 )
-def pyth_update_bytes(agent_id: int):
-    _todo()
+def pyth_update_bytes(
+    agent_id: int,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    response.headers["Cache-Control"] = "no-store"
+
+    agent = agent_repo.get_agent(db, agent_id)
+    if agent is None:
+        raise HTTPException(
+            404,
+            detail=ApiError(
+                error=ApiErrorCode.NotFound,
+                message=f"Agent {agent_id} not found",
+            ).model_dump(by_alias=True),
+        )
+
+    feeds = agent_repo.get_pyth_feeds_for_agent(db, agent_id)
+    feed_symbols = [f[0] for f in feeds]
+    feed_ids = [f[1] for f in feeds]
+
+    try:
+        update_data, _ = hermes_client.fetch_price_updates(feed_ids)
+    except hermes_client.HermesTimeout as e:
+        raise HTTPException(
+            503,
+            detail=ApiError(
+                error=ApiErrorCode.ChainUnreachable,
+                message="Hermes timeout",
+            ).model_dump(by_alias=True),
+        ) from e
+    except hermes_client.HermesError as e:
+        raise HTTPException(
+            503,
+            detail=ApiError(
+                error=ApiErrorCode.ChainUnreachable,
+                message=f"Hermes unavailable: {e}",
+            ).model_dump(by_alias=True),
+        ) from e
+
+    return PythUpdateBytesResponse(
+        update_data=update_data,
+        fee_mnt_wei=hermes_client.estimate_pyth_fee_wei(len(feed_ids)),
+        feeds=feed_symbols,
+        fetched_at=int(time.time()),
+    )
 
 
 # ─── Mandate parser ──────────────────────────────────────────────────────────
 
+_LOCKED_HINT_KEYS = {"carryBps", "maxLeverage", "carry_bps", "max_leverage"}
+
+
 @app.post(
     "/mandate/parse",
     response_model=MandateParseResponse,
-    responses={400: {"model": ApiError}, 429: {"model": ApiError}},
+    responses={
+        400: {"model": ApiError},
+        429: {"model": ApiError},
+        503: {"model": ApiError},
+    },
     summary="LLM mandate parse (NL → constrained JSON)",
     tags=["mandate"],
 )
-def parse_mandate(req: MandateParseRequest):
-    _todo()
+@limiter.limit("30/5 minutes")
+def parse_mandate(
+    request: Request,
+    req: MandateParseRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    response.headers["Cache-Control"] = "no-store"
+
+    # 1. LLM call
+    try:
+        parsed = parser.parse_mandate(req.natural_language_mandate, req.hints)
+    except anthropic.APITimeoutError as e:
+        raise HTTPException(
+            503,
+            detail=ApiError(
+                error=ApiErrorCode.ChainUnreachable,
+                message="LLM timeout (>30s)",
+            ).model_dump(by_alias=True),
+        ) from e
+    except (anthropic.APIConnectionError, anthropic.APIError) as e:
+        raise HTTPException(
+            503,
+            detail=ApiError(
+                error=ApiErrorCode.ChainUnreachable,
+                message=f"LLM unavailable: {type(e).__name__}",
+            ).model_dump(by_alias=True),
+        ) from e
+    except (ValueError, ValidationError) as e:
+        raise HTTPException(
+            400,
+            detail=ApiError(
+                error=ApiErrorCode.MandateParseFailed,
+                message=f"Could not extract mandate: {e}",
+            ).model_dump(by_alias=True),
+        ) from e
+
+    # 2. Hints override (non-locked fields only). Hints come in as camelCase
+    # JSON; MandateSchema accepts both camelCase aliases and snake_case attrs.
+    if req.hints:
+        non_locked_hints = {
+            k: v for k, v in req.hints.items() if k not in _LOCKED_HINT_KEYS
+        }
+        if non_locked_hints:
+            try:
+                merged = parsed.model_dump(by_alias=True)
+                merged.update(non_locked_hints)
+                parsed = MandateSchema.model_validate(merged)
+            except ValidationError:
+                pass  # ignore malformed hints — LLM output stays authoritative
+
+    # 3. Validation + protocol-locked normalization
+    try:
+        normalized, warnings = rules.validate_and_normalize(parsed)
+    except rules.MandateValidationError as e:
+        raise HTTPException(
+            400,
+            detail=ApiError(
+                error=ApiErrorCode.MandateParseFailed,
+                message=f"Mandate validation failed: {'; '.join(e.errors)}",
+                details={"errors": e.errors},
+            ).model_dump(by_alias=True),
+        ) from e
+
+    # 4. Hash + IPFS
+    mandate_dict = normalized.model_dump(by_alias=True)
+    mandate_hash = compute_mandate_hash(mandate_dict)
+    ipfs_uri, pinned = pin_mandate(mandate_dict, mandate_hash)
+
+    # 5. DB upsert
+    mandates_repo.upsert_mandate_blob(
+        db,
+        mandate_hash=mandate_hash,
+        mandate_dict=mandate_dict,
+        raw_text=req.natural_language_mandate,
+        ipfs_uri=ipfs_uri,
+        pinned=pinned,
+    )
+
+    return MandateParseResponse(
+        mandate=normalized,
+        mandate_hash=mandate_hash,
+        mandate_uri=ipfs_uri,
+        warnings=warnings,
+    )
 
 
 @app.post(
