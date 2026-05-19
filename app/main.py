@@ -45,7 +45,8 @@ from app.schemas import (
     LockupTier, MandateParseRequest, MandateParseResponse, MandateSchema,
     MandateValidateRequest, MandateValidateResponse, MintPreviewRequest,
     MintPreviewResponse, NavGranularity, NavHistoryResponse, NavPeriod, Page,
-    PortfolioResponse, PythUpdateBytesResponse, RedemptionRequest, SystemInfo,
+    PortfolioResponse, PythUpdateBytesResponse, RedemptionRequest,
+    SyntheticAssetInfo, SystemInfo,
 )
 from app.utils.addresses import addr_or_zero
 from app.utils.cache import cache_for
@@ -604,6 +605,11 @@ def system_info():
             ondo_usdy_adapter=addr_or_zero(s.ondo_usdy_adapter),
             pyth=addr_or_zero(s.pyth_contract),
             usdc=addr_or_zero(s.usdc),
+            agent_nft=addr_or_zero(s.agent_nft),
+            time_provider=addr_or_zero(s.time_provider),
+            agent_token_impl=addr_or_zero(s.agent_token_impl),
+            agent_vault_impl=addr_or_zero(s.agent_vault_impl),
+            founder_vault_impl=addr_or_zero(s.founder_vault_impl),
         ),
         fee_rates=FeeRates(
             mint_bps=s.mint_fee_bps,
@@ -619,7 +625,38 @@ def system_info():
             "ETH/USD": s.pyth_feed_eth_usd,
             "USDC/USD": s.pyth_feed_usdc_usd,
         },
-        synthetic_assets=[],
+        synthetic_assets=[
+            SyntheticAssetInfo(
+                address=addr_or_zero(s.snvda),
+                symbol="sNVDA",
+                underlying="NVDA",
+                pyth_feed_id=s.pyth_feed_nvda,
+            ),
+            SyntheticAssetInfo(
+                address=addr_or_zero(s.sspy),
+                symbol="sSPY",
+                underlying="SPY",
+                pyth_feed_id=s.pyth_feed_spy,
+            ),
+            SyntheticAssetInfo(
+                address=addr_or_zero(s.saapl),
+                symbol="sAAPL",
+                underlying="AAPL",
+                pyth_feed_id=s.pyth_feed_aapl,
+            ),
+            SyntheticAssetInfo(
+                address=addr_or_zero(s.stsla),
+                symbol="sTSLA",
+                underlying="TSLA",
+                pyth_feed_id=s.pyth_feed_tsla,
+            ),
+            SyntheticAssetInfo(
+                address=addr_or_zero(s.smsft),
+                symbol="sMSFT",
+                underlying="MSFT",
+                pyth_feed_id=s.pyth_feed_msft,
+            ),
+        ],
     )
 
 

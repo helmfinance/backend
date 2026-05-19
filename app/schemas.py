@@ -503,6 +503,13 @@ class ContractAddresses(HelmModel):
     pyth: Hex
     usdc: Hex
 
+    # NEW — added 2026-05 after SC deploy. Additive only; FE can ignore.
+    agent_nft: Hex
+    time_provider: Hex
+    agent_token_impl: Hex
+    agent_vault_impl: Hex
+    founder_vault_impl: Hex
+
 
 class FeeRates(HelmModel):
     mint_bps: BasisPoints

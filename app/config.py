@@ -60,6 +60,20 @@ class Settings(BaseSettings):
     mantle_meth: str = ""
     ondo_usdy: str = ""
 
+    # ─── New deployed contracts ───────────────────────────────────────────
+    agent_nft: str = ""
+    time_provider: str = ""
+    agent_token_impl: str = ""
+    agent_vault_impl: str = ""
+    founder_vault_impl: str = ""
+
+    # ─── Synthetic equity addresses ───────────────────────────────────────
+    snvda: str = ""
+    sspy: str = ""
+    saapl: str = ""
+    stsla: str = ""
+    smsft: str = ""
+
     # --- Server ---
     log_level: str = "INFO"
     cors_origins: str = "http://localhost:3000,http://localhost:8080"
