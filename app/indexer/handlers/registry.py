@@ -2,13 +2,20 @@ import time
 
 from sqlalchemy.orm import Session
 
+from app.chain.client import get_w3, registry
 from app.db import models
 
 
 def handle_agent_registered(db: Session, event):
-    """event.args: agentId, founder, deployment (struct with vault/token/founderVault addresses).
+    """event.args: agentId, founder, deployment (vault/token/founderVault addrs).
 
-    Exact struct key names are inferred from the ABI; fall back to positional access.
+    AgentRegistered does NOT emit mandateHash/mandateURI — those are only in
+    the registerAgent calldata. We re-fetch the tx and decode its input to
+    pull them, then resolve the body via mandate_blobs.
+
+    Returns silently (no row inserted) when calldata decoding fails — this
+    prevents the indexer from looping on the chunk with a UNIQUE constraint
+    violation on an empty mandate_hash.
     """
     args = event["args"]
     agent_id = args["agentId"]
@@ -20,11 +27,34 @@ def handle_agent_registered(db: Session, event):
     token_addr = dep["token"] if "token" in dep else dep[1]
     fv_addr = dep["founderVault"] if "founderVault" in dep else dep[2]
 
-    # mandate body is not on chain; only hash + URI. Reverse-resolve via mandate_blobs.
-    mandate_hash = args.get("mandateHash") or ""
-    mandate_uri = args.get("mandateURI") or ""
+    # Pull mandateHash / mandateURI from the registerAgent calldata.
+    tx_hash = event["transactionHash"]
+    if hasattr(tx_hash, "hex"):
+        tx_hash = tx_hash.hex()
 
-    blob = db.get(models.MandateBlob, mandate_hash) if mandate_hash else None
+    mandate_hash = ""
+    mandate_uri = ""
+    try:
+        tx = get_w3().eth.get_transaction(tx_hash)
+        fn, params = registry().decode_function_input(tx["input"])
+        if fn.fn_name == "registerAgent":
+            mh = params.get("mandateHash")
+            if isinstance(mh, (bytes, bytearray)):
+                mandate_hash = "0x" + bytes(mh).hex()
+            elif isinstance(mh, str):
+                mandate_hash = mh if mh.startswith("0x") else "0x" + mh
+            mandate_uri = params.get("mandateURI") or params.get("mandateUri") or ""
+    except Exception as e:
+        print(f"[indexer] decode calldata failed for tx {tx_hash}: {e}")
+        return
+
+    if not mandate_hash:
+        print(
+            f"[indexer] no mandateHash in calldata for agent {agent_id} — skipping",
+        )
+        return
+
+    blob = db.get(models.MandateBlob, mandate_hash)
     mandate_dict = blob.mandate_json if blob else {}
 
     now = int(time.time())
