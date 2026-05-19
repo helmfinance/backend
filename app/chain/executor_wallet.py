@@ -34,5 +34,7 @@ def send_tx(contract_func, value: int = 0, gas: int = 500_000) -> str:
         "gasPrice": w3.eth.gas_price,
     })
     signed = acct.sign_transaction(tx)
-    tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+    # eth-account ≥ 0.13 renamed `rawTransaction` → `raw_transaction`.
+    raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction
+    tx_hash = w3.eth.send_raw_transaction(raw)
     return tx_hash.hex()

@@ -46,10 +46,15 @@ from app.schemas import (
     ContractAddresses, Decision, DecisionType, FeeRates, HealthResponse,
     LockupTier, MandateParseRequest, MandateParseResponse, MandateSchema,
     MandateValidateRequest, MandateValidateResponse, MintPreviewRequest,
-    MintPreviewResponse, NavGranularity, NavHistoryResponse, NavPeriod, Page,
+    MintPreviewResponse, MintUsdcRequest, MintUsdcResponse,
+    NavGranularity, NavHistoryResponse, NavPeriod, Page,
     PortfolioResponse, PythUpdateBytesResponse, RedemptionRequest,
     SyntheticAssetInfo, SystemInfo,
+    TimeAdvanceRequest, TimeAdvanceResponse,
 )
+from app.chain.client import time_provider, usdc
+from app.chain.executor_wallet import send_tx
+from web3 import Web3
 from app.utils.addresses import addr_or_zero
 from app.utils.cache import cache_for
 
@@ -683,6 +688,73 @@ def system_info():
             ),
         ],
     )
+
+
+def _check_testnet() -> None:
+    if settings.chain_id not in (5003, 31337):
+        raise HTTPException(503, detail=ApiError(
+            error=ApiErrorCode.BadRequest,
+            message="Admin endpoints disabled on mainnet",
+        ).model_dump(by_alias=True))
+
+
+@app.post(
+    "/admin/time/advance",
+    response_model=TimeAdvanceResponse,
+    responses={400: {"model": ApiError}, 503: {"model": ApiError}},
+    summary="Advance TimeProvider clock (testnet only)",
+    tags=["admin"],
+)
+def admin_time_advance(req: TimeAdvanceRequest, response: Response) -> TimeAdvanceResponse:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    try:
+        tx_hash = send_tx(time_provider().functions.advance(req.seconds))
+        new_time = time_provider().functions.currentTime().call()
+        return TimeAdvanceResponse(
+            tx_hash=tx_hash,
+            advanced_seconds=req.seconds,
+            new_current_time=new_time,
+        )
+    except Exception as e:
+        raise HTTPException(503, detail=ApiError(
+            error=ApiErrorCode.ChainUnreachable,
+            message=f"time advance failed: {e}",
+        ).model_dump(by_alias=True)) from e
+
+
+@app.post(
+    "/admin/mint-usdc",
+    response_model=MintUsdcResponse,
+    responses={400: {"model": ApiError}, 503: {"model": ApiError}},
+    summary="Mint MockUSDC to address (testnet only)",
+    tags=["admin"],
+)
+def admin_mint_usdc(req: MintUsdcRequest, response: Response) -> MintUsdcResponse:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    try:
+        amount = int(req.amount_usdc)
+        if amount <= 0:
+            raise HTTPException(400, detail=ApiError(
+                error=ApiErrorCode.BadRequest,
+                message="amountUsdc must be > 0",
+            ).model_dump(by_alias=True))
+        tx_hash = send_tx(usdc().functions.mint(
+            Web3.to_checksum_address(req.to), amount
+        ))
+        return MintUsdcResponse(
+            tx_hash=tx_hash,
+            to=req.to.lower(),
+            amount_usdc=req.amount_usdc,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(503, detail=ApiError(
+            error=ApiErrorCode.ChainUnreachable,
+            message=f"mint failed: {e}",
+        ).model_dump(by_alias=True)) from e
 
 
 @app.get(

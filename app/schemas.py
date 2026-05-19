@@ -595,6 +595,31 @@ AgentStreamEvent = Annotated[
 ]
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Admin (testnet only)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TimeAdvanceRequest(HelmModel):
+    seconds: int = Field(ge=1, le=86400 * 365)  # 1s ~ 1y
+
+
+class TimeAdvanceResponse(HelmModel):
+    tx_hash: str
+    advanced_seconds: int
+    new_current_time: int
+
+
+class MintUsdcRequest(HelmModel):
+    to: Hex
+    amount_usdc: BigIntString  # 6-decimal integer string
+
+
+class MintUsdcResponse(HelmModel):
+    tx_hash: str
+    to: Hex
+    amount_usdc: BigIntString
+
+
 __all__ = [
     "Hex", "BigIntString", "UnixSeconds", "BasisPoints",
     "HelmModel",
@@ -620,4 +645,6 @@ __all__ = [
     "IndexerHealth", "CronHealth", "LlmHealth", "HealthResponse",
     "NavStreamEvent", "DecisionStreamEvent", "RedemptionStreamEvent", "DividendStreamEvent",
     "AgentStreamEvent",
+    "TimeAdvanceRequest", "TimeAdvanceResponse",
+    "MintUsdcRequest", "MintUsdcResponse",
 ]
