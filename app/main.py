@@ -42,6 +42,8 @@ from app.repos import agents as agent_repo
 from app.repos import mandates as mandates_repo
 from app.repos import portfolio as portfolio_repo
 from app.schemas import (
+    AdminDistributeResponse, AdminHarvestResponse,
+    AdminNftMetadataResponse, AdminRebalanceResponse,
     AgentDetail, AgentPhase, AgentSummary, ApiError, ApiErrorCode, AssetClass,
     ContractAddresses, Decision, DecisionType, FeeRates, HealthResponse,
     LockupTier, MandateParseRequest, MandateParseResponse, MandateSchema,
@@ -54,6 +56,7 @@ from app.schemas import (
 )
 from app.chain.client import time_provider, usdc
 from app.chain.executor_wallet import send_tx
+from app.services import distribute, harvest, nft_metadata, rebalance
 from web3 import Web3
 from app.utils.addresses import addr_or_zero
 from app.utils.cache import cache_for
@@ -754,6 +757,100 @@ def admin_mint_usdc(req: MintUsdcRequest, response: Response) -> MintUsdcRespons
         raise HTTPException(503, detail=ApiError(
             error=ApiErrorCode.ChainUnreachable,
             message=f"mint failed: {e}",
+        ).model_dump(by_alias=True)) from e
+
+
+@app.post(
+    "/admin/agents/{agent_id}/rebalance",
+    response_model=AdminRebalanceResponse,
+    responses={503: {"model": ApiError}},
+    summary="Trigger rebalance for agent (testnet only)",
+    tags=["admin"],
+)
+def admin_rebalance(agent_id: int, response: Response) -> AdminRebalanceResponse:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    try:
+        result = rebalance.execute(agent_id)
+        return AdminRebalanceResponse(
+            agent_id=agent_id,
+            tx_hash=result["tx_hash"],
+            target_weights=result.get("targets") or result.get("target_weights") or [],
+        )
+    except Exception as e:
+        raise HTTPException(503, detail=ApiError(
+            error=ApiErrorCode.ChainUnreachable,
+            message=f"rebalance failed: {e}",
+        ).model_dump(by_alias=True)) from e
+
+
+@app.post(
+    "/admin/agents/{agent_id}/harvest",
+    response_model=AdminHarvestResponse,
+    responses={503: {"model": ApiError}},
+    summary="Trigger harvest for agent (testnet only)",
+    tags=["admin"],
+)
+def admin_harvest(agent_id: int, response: Response) -> AdminHarvestResponse:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    try:
+        result = harvest.run(agent_id)
+        return AdminHarvestResponse(agent_id=agent_id, tx_hash=result["tx_hash"])
+    except Exception as e:
+        raise HTTPException(503, detail=ApiError(
+            error=ApiErrorCode.ChainUnreachable,
+            message=f"harvest failed: {e}",
+        ).model_dump(by_alias=True)) from e
+
+
+@app.post(
+    "/admin/agents/{agent_id}/distribute",
+    response_model=AdminDistributeResponse,
+    responses={503: {"model": ApiError}},
+    summary="Trigger dividend distribute for agent (testnet only)",
+    tags=["admin"],
+)
+def admin_distribute(agent_id: int, response: Response) -> AdminDistributeResponse:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    try:
+        result = distribute.run(agent_id)
+        return AdminDistributeResponse(
+            agent_id=agent_id,
+            amount=str(result.get("amount", 0)),
+            stage_tx_hash=result.get("stage_tx_hash"),
+            distribute_tx_hash=result.get("distribute_tx_hash"),
+            note=result.get("note"),
+        )
+    except Exception as e:
+        raise HTTPException(503, detail=ApiError(
+            error=ApiErrorCode.ChainUnreachable,
+            message=f"distribute failed: {e}",
+        ).model_dump(by_alias=True)) from e
+
+
+@app.post(
+    "/admin/agents/{agent_id}/nft-metadata",
+    response_model=AdminNftMetadataResponse,
+    responses={503: {"model": ApiError}},
+    summary="Regenerate NFT metadata + pin IPFS + setTokenURI (testnet only)",
+    tags=["admin"],
+)
+def admin_nft_metadata(agent_id: int, response: Response) -> AdminNftMetadataResponse:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    try:
+        result = nft_metadata.update(agent_id)
+        return AdminNftMetadataResponse(
+            agent_id=agent_id,
+            tx_hash=result["tx_hash"],
+            uri=result["uri"],
+        )
+    except Exception as e:
+        raise HTTPException(503, detail=ApiError(
+            error=ApiErrorCode.ChainUnreachable,
+            message=f"nft metadata update failed: {e}",
         ).model_dump(by_alias=True)) from e
 
 

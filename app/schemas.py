@@ -620,6 +620,35 @@ class MintUsdcResponse(HelmModel):
     amount_usdc: BigIntString
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Admin — K service triggers (testnet only)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AdminRebalanceResponse(HelmModel):
+    agent_id: int
+    tx_hash: str
+    target_weights: list[tuple[str, int]]
+
+
+class AdminHarvestResponse(HelmModel):
+    agent_id: int
+    tx_hash: str
+
+
+class AdminDistributeResponse(HelmModel):
+    agent_id: int
+    amount: BigIntString
+    stage_tx_hash: str | None = None
+    distribute_tx_hash: str | None = None
+    note: str | None = None
+
+
+class AdminNftMetadataResponse(HelmModel):
+    agent_id: int
+    tx_hash: str
+    uri: str
+
+
 __all__ = [
     "Hex", "BigIntString", "UnixSeconds", "BasisPoints",
     "HelmModel",
@@ -647,4 +676,6 @@ __all__ = [
     "AgentStreamEvent",
     "TimeAdvanceRequest", "TimeAdvanceResponse",
     "MintUsdcRequest", "MintUsdcResponse",
+    "AdminRebalanceResponse", "AdminHarvestResponse",
+    "AdminDistributeResponse", "AdminNftMetadataResponse",
 ]
