@@ -1,3 +1,5 @@
+import time
+
 from app.chain.client import get_w3
 from app.config import settings
 from app.db.session import SessionLocal
@@ -27,6 +29,21 @@ def run_one_cycle():
         if start > safe:
             return  # nothing to do
 
+        # Active-vault count drives per-cycle RPC cost; log it so a slowdown
+        # tied to growing agent set is visible.
+        from app.db.models import Agent
+        active_vaults = (
+            db.query(Agent)
+            .filter(Agent.agent_id < 9000)
+            .filter(Agent.phase != "Settled")
+            .count()
+        )
+        cycle_start = time.monotonic()
+        print(
+            f"[indexer] cycle: blocks {start}-{safe} "
+            f"({safe - start + 1} blocks), active vaults: {active_vaults}"
+        )
+
         cur = start
         while cur <= safe:
             chunk_end = min(cur + CHUNK_SIZE - 1, safe)
@@ -39,4 +56,5 @@ def run_one_cycle():
                 print(f"[indexer] chunk {cur}-{chunk_end} failed: {e}")
                 return  # next cycle retries the same chunk
             cur = chunk_end + 1
-        print(f"[indexer] synced to block {safe}")
+        elapsed = time.monotonic() - cycle_start
+        print(f"[indexer] synced to block {safe} in {elapsed:.1f}s")

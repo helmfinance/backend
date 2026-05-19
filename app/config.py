@@ -84,8 +84,12 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000,http://localhost:8080"
 
     # --- Indexer ---
-    indexer_poll_seconds: int = 5
-    indexer_chunk_blocks: int = 1000
+    # Poll cadence is bounded by per-cycle RPC cost (chunk × N active vaults ×
+    # event types). 15s + 200 keeps a single cycle comfortably under interval
+    # for the current agent set; if the active count grows past ~30 agents,
+    # split vault polling onto its own scheduler job.
+    indexer_poll_seconds: int = 15
+    indexer_chunk_blocks: int = 200
 
     # --- Protocol constants (env, not on-chain reads) ---
     mint_fee_bps: int = 50

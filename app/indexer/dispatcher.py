@@ -28,13 +28,21 @@ NFT_EVENTS = {
 def process_range(db, start_block: int, end_block: int):
     w3 = get_w3()
 
-    # 1) Registry events
+    # 1) Registry events (global — one RPC regardless of agent count)
     _process_contract_events(db, registry(), REGISTRY_EVENTS, start_block, end_block)
-    # 2) NFT events
+    # 2) NFT events (global)
     _process_contract_events(db, agent_nft(), NFT_EVENTS, start_block, end_block)
-    # 3) Vault events for every known agent vault
+    # 3) Vault events — only for agents with a real on-chain vault that is
+    #    still active. Skip:
+    #      * seed agents (agent_id >= 9000) — stub vault addresses, never emit.
+    #      * Settled agents — fully wound down, no rebalance/yield activity.
     from app.db.models import Agent
-    vaults = db.query(Agent).all()
+    vaults = (
+        db.query(Agent)
+        .filter(Agent.agent_id < 9000)
+        .filter(Agent.phase != "Settled")
+        .all()
+    )
     for a in vaults:
         c = w3.eth.contract(
             address=w3.to_checksum_address(a.vault_address),

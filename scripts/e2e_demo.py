@@ -195,9 +195,10 @@ def step1_register_agent() -> int:
     tx_hash = result["tx_hash"]
     print(f"[step1] registerAgent tx: {tx_hash} (block {result['block_number']})")
 
-    # Decode AgentRegistered event from receipt (send_tx already waited +
-    # asserted status=1, but we still need the receipt for log parsing).
-    receipt = get_w3().eth.get_transaction_receipt(tx_hash)
+    # Decode AgentRegistered event from the receipt that send_tx already
+    # captured. Re-fetching with eth_getTransactionReceipt races against
+    # Mantle Sepolia's node-visibility lag (intermittent TransactionNotFound).
+    receipt = result["receipt"]
     logs = registry().events.AgentRegistered().process_receipt(receipt)
     assert logs, "no AgentRegistered event in receipt"
     args = logs[0]["args"]
@@ -209,7 +210,7 @@ def step1_register_agent() -> int:
     wait_for_indexer(
         lambda: _agent_exists(agent_id),
         f"Agent {agent_id} in DB",
-        timeout=30,
+        timeout=60,
     )
     return {"agent_id": agent_id, "vault_addr": vault_addr}
 
@@ -290,12 +291,12 @@ def step2_deposit(agent_id: int, amount_usdc: int) -> None:
     wait_for_indexer(
         lambda: _holder_balance(agent_id, addr_lower) > 0,
         f"Holder {addr_lower[:8]}… balance > 0",
-        timeout=30,
+        timeout=60,
     )
     wait_for_indexer(
         lambda: _nav_history_count(agent_id) > 0,
         f"NAV history row for agent {agent_id}",
-        timeout=30,
+        timeout=60,
     )
 
 
@@ -325,7 +326,7 @@ def step3_advance_phase(agent_id: int) -> None:
     wait_for_indexer(
         lambda: _agent_phase(agent_id) == "PublicLaunch",
         f"agent {agent_id} → PublicLaunch",
-        timeout=30,
+        timeout=60,
     )
 
 
@@ -343,10 +344,13 @@ def step4_run_services(agent_id: int) -> None:
     try:
         result = rebalance.execute(agent_id)
         print(f"[step4]   tx: {result['tx_hash']}")
-        time.sleep(15)  # wait for Rebalanced event indexing
-        decision_count = _decision_count(agent_id, "Rebalance")
-        assert decision_count > 0, (
-            f"no Rebalance decision indexed (found {decision_count})"
+        # Indexer polls every settings.indexer_poll_seconds (default 5s). The
+        # Rebalanced event needs to flow through one full cycle + RPC roundtrips,
+        # so allow 30s before declaring drift.
+        wait_for_indexer(
+            lambda: _decision_count(agent_id, "Rebalance") > 0,
+            "Rebalance decision indexed",
+            timeout=60,
         )
     except Exception as e:
         print(f"[step4] rebalance FAILED: {e}")
@@ -356,9 +360,11 @@ def step4_run_services(agent_id: int) -> None:
     try:
         result = harvest.run(agent_id)
         print(f"[step4]   tx: {result['tx_hash']}")
-        time.sleep(15)
-        h_count = _decision_count(agent_id, "Harvest")
-        assert h_count > 0, "no Harvest decision indexed"
+        wait_for_indexer(
+            lambda: _decision_count(agent_id, "Harvest") > 0,
+            "Harvest decision indexed",
+            timeout=60,
+        )
     except Exception as e:
         print(f"[step4] harvest WARNING: {e}")  # may have no yield to harvest
 
@@ -373,12 +379,15 @@ def step4_run_services(agent_id: int) -> None:
     try:
         result = nft_metadata.update(agent_id)
         print(f"[step4]   tx: {result['tx_hash']}, uri: {result['uri']}")
-        time.sleep(5)
+        # setTokenURI is a chain write; wait until on-chain reflects the new URI.
+        # No indexer dependency — pure read against the NFT contract.
+        wait_for_indexer(
+            lambda: result["uri"] in agent_nft().functions.tokenURI(agent_id).call(),
+            "tokenURI on-chain matches",
+            timeout=15,
+        )
         on_chain_uri = agent_nft().functions.tokenURI(agent_id).call()
         print(f"[step4]   on-chain tokenURI: {on_chain_uri}")
-        assert (
-            result["uri"] in on_chain_uri or on_chain_uri == result["uri"]
-        ), f"tokenURI mismatch: {on_chain_uri!r} vs {result['uri']!r}"
     except Exception as e:
         print(f"[step4] nft_metadata FAILED: {e}")
         raise

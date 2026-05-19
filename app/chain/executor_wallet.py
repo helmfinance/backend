@@ -159,4 +159,8 @@ def _send_with_retry(
         "block_number": receipt["blockNumber"],
         "gas_used": receipt["gasUsed"],
         "status": receipt["status"],
+        "receipt": receipt,  # raw receipt incl. logs — callers reuse to avoid
+                             # a second eth_getTransactionReceipt RPC roundtrip,
+                             # which on Mantle Sepolia occasionally hits a node
+                             # that hasn't seen the tx yet (TransactionNotFound).
     }

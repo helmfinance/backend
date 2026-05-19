@@ -1,0 +1,59 @@
+{
+  "version": "1.0",
+  "name": "Defensive Tech Basket",
+  "ticker": "DTECH",
+  "description": "Defensive tech basket: 60% large-cap tech, 25% mETH yield, 15% USDY cash.",
+  "assetClasses": [
+    "equity",
+    "crypto",
+    "cash"
+  ],
+  "targetUniverse": [
+    "sNVDA",
+    "sMSFT",
+    "sAAPL",
+    "mETH",
+    "USDY"
+  ],
+  "weightConstraints": [
+    {
+      "asset": "sNVDA",
+      "minBps": 1800,
+      "maxBps": 2200
+    },
+    {
+      "asset": "sMSFT",
+      "minBps": 1800,
+      "maxBps": 2200
+    },
+    {
+      "asset": "sAAPL",
+      "minBps": 1800,
+      "maxBps": 2200
+    },
+    {
+      "asset": "mETH",
+      "minBps": 2300,
+      "maxBps": 2700
+    },
+    {
+      "asset": "USDY",
+      "minBps": 1300,
+      "maxBps": 1700
+    }
+  ],
+  "rebalanceFrequency": "weekly",
+  "rebalanceTriggers": [],
+  "allowedLockups": [
+    "30d",
+    "60d"
+  ],
+  "minimumDepositUsdc": "10000000",
+  "founderShareBps": 1000,
+  "carryBps": 1000,
+  "founderLockupDays": 180,
+  "subordinationThresholdBps": 5000,
+  "maxLeverage": 1.0,
+  "maxSinglePositionBps": 2500,
+  "emergencyExitConditions": []
+}
