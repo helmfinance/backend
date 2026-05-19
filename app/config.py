@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     cors_origins: str = "http://localhost:3000,http://localhost:8080"
 
+    # --- Indexer ---
+    indexer_poll_seconds: int = 5
+    indexer_chunk_blocks: int = 1000
+
     # --- Protocol constants (env, not on-chain reads) ---
     mint_fee_bps: int = 50
     redeem_fee_bps: int = 50

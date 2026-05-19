@@ -18,8 +18,10 @@ FE workflow (see docs/frontend/openapi-typegen.md):
 """
 
 import time
+from contextlib import asynccontextmanager
 
 import anthropic
+from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
@@ -66,12 +68,35 @@ def _api_error(status: int, code: ApiErrorCode, message: str) -> HTTPException:
         detail=ApiError(error=code, message=message).model_dump(by_alias=True),
     )
 
+scheduler = BackgroundScheduler()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Lazy import so test imports don't drag the chain client.
+    from app.indexer.listener import run_one_cycle
+
+    scheduler.add_job(
+        run_one_cycle,
+        "interval",
+        seconds=settings.indexer_poll_seconds,
+        id="indexer",
+    )
+    scheduler.start()
+    print(f"[indexer] started, poll={settings.indexer_poll_seconds}s")
+    try:
+        yield
+    finally:
+        scheduler.shutdown()
+
+
 app = FastAPI(
     title="Helm Backend",
     description="REST API for the Helm AI Agent ETF on Mantle.",
     version="0.1.0",
     contact={"name": "Helm team"},
     license_info={"name": "MIT"},
+    lifespan=lifespan,
 )
 
 # Per-IP rate limiter (in-memory; single-instance MVP).
