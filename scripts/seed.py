@@ -132,7 +132,7 @@ def _agent2_mandate() -> dict:
 
 def _seed_agent1(db, now: int) -> None:
     mandate = _agent1_mandate()
-    mandate_hash = hash66("agent:1:mandate")
+    mandate_hash = hash66("agent:9001:mandate")
     db.add(
         MandateBlob(
             mandate_hash=mandate_hash,
@@ -148,7 +148,7 @@ def _seed_agent1(db, now: int) -> None:
     public_launch_at = now - 30 * 86400
 
     agent = Agent(
-        agent_id=1,
+        agent_id=9001,
         name=mandate["name"],
         ticker=mandate["ticker"],
         founder_address="0x" + "0" * 36 + "f001",
@@ -183,7 +183,7 @@ def _seed_agent1(db, now: int) -> None:
         amount_units = value * SHARES // price if price > 0 else 0
         db.add(
             Position(
-                agent_id=1,
+                agent_id=9001,
                 asset_address=asset_addr,
                 symbol=symbol,
                 asset_class=asset_class,
@@ -207,7 +207,7 @@ def _seed_agent1(db, now: int) -> None:
         nav_usdc = total_shares * nav_ps // SHARES
         db.add(
             NavPoint(
-                agent_id=1,
+                agent_id=9001,
                 timestamp=ts,
                 nav_usdc=str(nav_usdc),
                 nav_per_share_usdc=str(nav_ps),
@@ -224,7 +224,7 @@ def _seed_agent1(db, now: int) -> None:
         ("Distribute", public_launch_at + 28 * 86400, "Distributed epoch 1 to holders."),
     ]
     for i, (kind, ts, summary) in enumerate(decisions_spec):
-        tx = hash66(f"agent:1:tx:{i}")
+        tx = hash66(f"agent:9001:tx:{i}")
         kwargs = {
             "id": f"{tx}:{i}",
             "agent_id": 1,
@@ -254,7 +254,7 @@ def _seed_agent1(db, now: int) -> None:
     epoch_ts = public_launch_at + 28 * 86400
     db.add(
         DividendEpoch(
-            agent_id=1,
+            agent_id=9001,
             epoch=1,
             total_amount_usdc=str(100_000 * USDC),
             holders_share_usdc=str(90_000 * USDC),
@@ -275,7 +275,7 @@ def _seed_agent1(db, now: int) -> None:
         balance = total_shares * weight_bps // 10000
         db.add(
             Holder(
-                agent_id=1,
+                agent_id=9001,
                 address=h_addr,
                 balance=str(balance),
                 weight_bps=weight_bps,
@@ -285,7 +285,7 @@ def _seed_agent1(db, now: int) -> None:
         )
         db.add(
             DividendClaim(
-                agent_id=1,
+                agent_id=9001,
                 epoch=1,
                 holder_address=h_addr,
                 amount_usdc=str(claim_units * USDC // 1000 * 1000),  # cosmetic
@@ -308,7 +308,7 @@ def _seed_agent1(db, now: int) -> None:
         db.add(
             RedemptionRequest(
                 request_id=rid,
-                agent_id=1,
+                agent_id=9001,
                 holder_address=h_addr,
                 shares=str(shares),
                 tier="30d",
@@ -323,7 +323,7 @@ def _seed_agent1(db, now: int) -> None:
     # Founder vault, 6mo lockup
     db.add(
         FounderVault(
-            agent_id=1,
+            agent_id=9001,
             address=addr("agent:1:foundervault"),
             shares_held=str(50_000 * SHARES),  # 5% founder share
             lockup_ends_at=public_launch_at + 180 * 86400,
@@ -338,7 +338,7 @@ def _seed_agent1(db, now: int) -> None:
     week_end = week_start + 7 * 86400
     db.add(
         NarratorNote(
-            agent_id=1,
+            agent_id=9001,
             week_start=week_start,
             week_end=week_end,
             generated_at=week_end + 3600,
@@ -356,7 +356,7 @@ def _seed_agent1(db, now: int) -> None:
 
 def _seed_agent2(db, now: int) -> None:
     mandate = _agent2_mandate()
-    mandate_hash = hash66("agent:2:mandate")
+    mandate_hash = hash66("agent:9002:mandate")
     db.add(
         MandateBlob(
             mandate_hash=mandate_hash,
@@ -371,7 +371,7 @@ def _seed_agent2(db, now: int) -> None:
     incubation_start = now - 12 * 86400
 
     agent = Agent(
-        agent_id=2,
+        agent_id=9002,
         name=mandate["name"],
         ticker=mandate["ticker"],
         founder_address=addr("agent:2:founder"),
@@ -405,7 +405,7 @@ def _seed_agent2(db, now: int) -> None:
         amount_units = value * SHARES // price if price > 0 else 0
         db.add(
             Position(
-                agent_id=2,
+                agent_id=9002,
                 asset_address=asset_addr,
                 symbol=symbol,
                 asset_class=asset_class,
@@ -429,7 +429,7 @@ def _seed_agent2(db, now: int) -> None:
         nav_usdc = total_shares * nav_ps // SHARES
         db.add(
             NavPoint(
-                agent_id=2,
+                agent_id=9002,
                 timestamp=ts,
                 nav_usdc=str(nav_usdc),
                 nav_per_share_usdc=str(nav_ps),
@@ -438,11 +438,11 @@ def _seed_agent2(db, now: int) -> None:
         )
 
     # 1 decision: founder seed mint logged as a Rebalance.
-    tx = hash66("agent:2:tx:0")
+    tx = hash66("agent:9002:tx:0")
     db.add(
         Decision(
             id=f"{tx}:0",
-            agent_id=2,
+            agent_id=9002,
             type="Rebalance",
             timestamp=incubation_start + 3600,
             tx_hash=tx,
@@ -459,7 +459,7 @@ def _seed_agent2(db, now: int) -> None:
     founder_addr = addr("agent:2:founder")
     db.add(
         Holder(
-            agent_id=2,
+            agent_id=9002,
             address=founder_addr,
             balance=str(total_shares),
             weight_bps=10000,
@@ -469,7 +469,7 @@ def _seed_agent2(db, now: int) -> None:
     )
     db.add(
         FounderVault(
-            agent_id=2,
+            agent_id=9002,
             address=addr("agent:2:foundervault"),
             shares_held=str(total_shares // 10),  # 10% founder share
             lockup_ends_at=incubation_start + 180 * 86400,
