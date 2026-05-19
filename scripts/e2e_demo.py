@@ -200,15 +200,45 @@ def step1_register_agent() -> int:
     receipt = get_w3().eth.get_transaction_receipt(tx_hash)
     logs = registry().events.AgentRegistered().process_receipt(receipt)
     assert logs, "no AgentRegistered event in receipt"
-    agent_id = logs[0]["args"]["agentId"]
-    print(f"[step1] new agent_id: {agent_id}")
+    args = logs[0]["args"]
+    agent_id = args["agentId"]
+    deployment = args["deployment"]
+    vault_addr = deployment["vault"] if "vault" in deployment else deployment[3]
+    print(f"[step1] new agent_id: {agent_id}, vault: {vault_addr}")
 
     wait_for_indexer(
         lambda: _agent_exists(agent_id),
         f"Agent {agent_id} in DB",
         timeout=30,
     )
-    return agent_id
+    return {"agent_id": agent_id, "vault_addr": vault_addr}
+
+
+# ─── Step 1.5: whitelist new vault on each SyntheticAsset ────────────────────
+
+
+def step1_5_whitelist_vault(vault_addr: str) -> None:
+    """Each SyntheticAsset has an admin-only `registeredVaults` whitelist.
+    AgentVault clones must be added before executeRebalance can call into
+    them (otherwise `OnlyRegisteredVault()` revert). The executor key is
+    the deployer = admin on all 5 s-assets, so we call registerVault here.
+    USDY/mETH adapters don't gate by vault, so they're skipped.
+    """
+    from app.chain.client import contract_at
+
+    assets = [
+        ("sNVDA", settings.snvda),
+        ("sSPY",  settings.sspy),
+        ("sAAPL", settings.saapl),
+        ("sTSLA", settings.stsla),
+        ("sMSFT", settings.smsft),
+    ]
+    checksum_vault = Web3.to_checksum_address(vault_addr)
+    for label, addr in assets:
+        c = contract_at("SyntheticAsset", addr)
+        result = send_tx(c.functions.registerVault(checksum_vault))
+        print(f"[step1_5] whitelisted {label}({addr[:10]}…): "
+              f"tx={result['tx_hash'][:18]}…")
 
 
 def _agent_exists(agent_id: int) -> bool:
@@ -375,7 +405,12 @@ def main() -> None:
         check_environment()
         print()
 
-        agent_id = step1_register_agent()
+        step1 = step1_register_agent()
+        agent_id = step1["agent_id"]
+        vault_addr = step1["vault_addr"]
+        print()
+
+        step1_5_whitelist_vault(vault_addr)
         print()
 
         step2_deposit(agent_id, 100_000_000)  # 100 USDC
