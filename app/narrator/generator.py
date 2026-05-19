@@ -1,11 +1,11 @@
 """Weekly narrator note generator.
 
 Pulls an agent's decisions + NAV change for the current ISO week, hands them
-to Claude Sonnet 4.6 with the agent's personality from its mandate, and
-upserts the resulting markdown into `narrator_notes`.
+to an LLM with the agent's personality from its mandate, and upserts the
+resulting markdown into `narrator_notes`.
 
 `_call_llm` is split out so tests / `scripts/generate_notes.py --mock` can
-substitute a canned response.
+substitute a canned response. (Migrated from Anthropic to OpenAI 2026-05.)
 """
 
 from __future__ import annotations
@@ -13,14 +13,14 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Callable
 
-from anthropic import Anthropic
+from openai import OpenAI
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import models
 
-MODEL = "claude-sonnet-4-6"
+MODEL = settings.openai_narrator_model
 MAX_TOKENS = 1500
 TIMEOUT = 30
 
@@ -93,20 +93,20 @@ Write the note now."""
 
 
 def _call_llm(system_prompt: str, user_message: str) -> str:
-    """Real Anthropic call. Mockable for tests / scripts."""
-    if not settings.anthropic_api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY not configured")
-    client = Anthropic(api_key=settings.anthropic_api_key, timeout=TIMEOUT)
-    response = client.messages.create(
+    """Real OpenAI call. Mockable for tests / scripts."""
+    if not settings.openai_api_key:
+        raise RuntimeError("OPENAI_API_KEY not configured")
+    client = OpenAI(api_key=settings.openai_api_key, timeout=TIMEOUT)
+    response = client.chat.completions.create(
         model=MODEL,
         max_tokens=MAX_TOKENS,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_message}],
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
     )
-    parts = [
-        b.text for b in response.content if getattr(b, "type", None) == "text"
-    ]
-    return "\n".join(parts).strip()
+    content = response.choices[0].message.content or ""
+    return content.strip()
 
 
 def generate_note(
@@ -120,7 +120,7 @@ def generate_note(
 
     Returns None if the agent does not exist, has no NAV history, or has had
     no activity to narrate (no decisions + zero NAV change).
-    Pass `llm=mock_fn` to bypass the Anthropic call.
+    Pass `llm=mock_fn` to bypass the OpenAI call.
     """
     if now is None:
         now = int(dt.datetime.now(dt.UTC).timestamp())

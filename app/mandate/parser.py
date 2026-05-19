@@ -1,17 +1,21 @@
-"""Claude Sonnet 4.6 mandate parser.
+"""OpenAI mandate parser.
 
-Uses Anthropic tool-use with `tool_choice={"type": "tool", "name": "set_mandate"}`
-to force structured JSON output that matches MandateSchema.
+Uses OpenAI function calling with `tool_choice={"type":"function","name":"set_mandate"}`
+to force structured JSON output that matches MandateSchema. (Migrated from
+Anthropic tool-use 2026-05; anthropic SDK remains installed for fallback.)
 """
 
 from __future__ import annotations
 
-from anthropic import Anthropic
+import json
+from collections.abc import Callable
+
+from openai import OpenAI
 
 from app.config import settings
 from app.schemas import MandateSchema
 
-MODEL = "claude-sonnet-4-6"
+MODEL = settings.openai_mandate_model
 MAX_TOKENS = 2000
 TIMEOUT_SECONDS = 30
 
@@ -43,46 +47,57 @@ DEFAULT INFERENCE (when user doesn't specify):
 Use the set_mandate tool with the parsed mandate. Always include all required fields."""
 
 
-def _client() -> Anthropic:
-    if not settings.anthropic_api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY not configured")
-    return Anthropic(api_key=settings.anthropic_api_key, timeout=TIMEOUT_SECONDS)
+def _client() -> OpenAI:
+    if not settings.openai_api_key:
+        raise RuntimeError("OPENAI_API_KEY not configured")
+    return OpenAI(api_key=settings.openai_api_key, timeout=TIMEOUT_SECONDS)
 
 
-def parse_mandate(natural_language: str, hints: dict | None = None) -> MandateSchema:
-    """Calls Claude with tool-use to enforce MandateSchema output.
+def parse_mandate(
+    natural_language: str,
+    hints: dict | None = None,
+    *,
+    llm: Callable[[str, str, dict], dict] | None = None,
+) -> MandateSchema:
+    """Calls OpenAI with function calling to enforce MandateSchema output.
+
+    ``llm`` injection (matching narrator's pattern) takes
+    ``(system_prompt, user_message, tool_spec)`` and returns the parsed
+    tool-call arguments dict. Caller validates against MandateSchema.
 
     Raises ValueError if tool not called or schema validation fails.
-    Raises anthropic.* on transport errors (caller maps to 503).
+    Raises openai.* on transport errors (caller maps to 503).
     """
-    client = _client()
-
     user_text = natural_language
     if hints:
         user_text += f"\n\nUser hints (apply where consistent): {hints}"
 
-    schema = MandateSchema.model_json_schema()
+    tool_spec = {
+        "type": "function",
+        "function": {
+            "name": "set_mandate",
+            "description": "Submit the parsed mandate fields.",
+            "parameters": MandateSchema.model_json_schema(),
+        },
+    }
 
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=MAX_TOKENS,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_text}],
-        tools=[
-            {
-                "name": "set_mandate",
-                "description": "Submit the parsed mandate fields.",
-                "input_schema": schema,
-            }
-        ],
-        tool_choice={"type": "tool", "name": "set_mandate"},
-    )
+    if llm is not None:
+        args = llm(SYSTEM_PROMPT, user_text, tool_spec)
+    else:
+        client = _client()
+        response = client.chat.completions.create(
+            model=MODEL,
+            max_tokens=MAX_TOKENS,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_text},
+            ],
+            tools=[tool_spec],
+            tool_choice={"type": "function", "function": {"name": "set_mandate"}},
+        )
+        msg = response.choices[0].message
+        if not msg.tool_calls:
+            raise ValueError("OpenAI did not call set_mandate tool")
+        args = json.loads(msg.tool_calls[0].function.arguments)
 
-    tool_block = next(
-        (b for b in response.content if getattr(b, "type", None) == "tool_use"),
-        None,
-    )
-    if tool_block is None:
-        raise ValueError("Claude did not call set_mandate tool")
-
-    return MandateSchema.model_validate(tool_block.input)
+    return MandateSchema.model_validate(args)

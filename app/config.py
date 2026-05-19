@@ -23,8 +23,13 @@ class Settings(BaseSettings):
     # --- Cron signer ---
     cron_signer_private_key: str = "0x"
 
-    # --- Anthropic ---
+    # --- Anthropic (legacy — kept for fallback) ---
     anthropic_api_key: str = ""
+
+    # --- OpenAI (current LLM provider) ---
+    openai_api_key: str = ""
+    openai_mandate_model: str = "gpt-4o-mini"
+    openai_narrator_model: str = "gpt-4o"
 
     # --- Database ---
     database_url: str = "sqlite:///./helm.db"

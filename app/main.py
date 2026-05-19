@@ -20,7 +20,7 @@ FE workflow (see docs/frontend/openapi-typegen.md):
 import time
 from contextlib import asynccontextmanager
 
-import anthropic
+import openai
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -457,7 +457,7 @@ def parse_mandate(
     # 1. LLM call
     try:
         parsed = parser.parse_mandate(req.natural_language_mandate, req.hints)
-    except anthropic.APITimeoutError as e:
+    except openai.APITimeoutError as e:
         raise HTTPException(
             503,
             detail=ApiError(
@@ -465,7 +465,7 @@ def parse_mandate(
                 message="LLM timeout (>30s)",
             ).model_dump(by_alias=True),
         ) from e
-    except (anthropic.APIConnectionError, anthropic.APIError) as e:
+    except (openai.APIConnectionError, openai.APIError) as e:
         raise HTTPException(
             503,
             detail=ApiError(
