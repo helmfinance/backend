@@ -1,14 +1,21 @@
+import re
+import time
+
 from eth_account import Account
 
 from app.chain.client import get_w3
 from app.config import settings
 
 # Mantle Sepolia gas oracle is noisy; over-pay by 20% so a tx doesn't get
-# stuck below the next block's base price. On a same-nonce conflict
-# ("replacement transaction underpriced") we retry once at 1.5x.
+# stuck below the next block's base price. On `replacement underpriced`
+# we bump multiplier by 1.3x (capped at 1.5x floor). On `nonce too low`
+# we parse the RPC's expected nonce out of the error string and re-sign.
 GAS_PRICE_MULTIPLIER = 1.2
 GAS_PRICE_RETRY_MULTIPLIER = 1.5
 RECEIPT_TIMEOUT = 60
+MAX_RETRIES = 3
+# Geth/Erigon-style sequencer error: "nonce too low: next nonce 55, tx nonce 54"
+NONCE_RE = re.compile(r"next nonce (\d+)")
 
 
 def get_account():
@@ -35,32 +42,58 @@ def send_tx(
     """Build, sign, send a transaction.
 
     By default waits for the receipt and returns a dict with the resolved
-    transaction context. Callers that just want fire-and-forget can pass
-    ``wait=False`` to get the hex tx-hash back.
+    transaction context. ``wait=False`` returns the hex tx-hash immediately.
+
+    On ``nonce too low``: parse the RPC's "next nonce N" hint and retry with
+    that nonce overridden. On ``replacement underpriced``: bump the gas
+    multiplier. Total retries capped at ``MAX_RETRIES``.
 
     Returns:
         wait=True:  ``{"tx_hash", "block_number", "gas_used", "status"}``
         wait=False: tx_hash hex string
 
     Raises:
-        RuntimeError: receipt ``status != 1`` (transaction reverted).
+        RuntimeError: receipt ``status != 1`` (transaction reverted) or
+            retry budget exhausted.
         TimeoutError: receipt did not appear within ``RECEIPT_TIMEOUT``.
     """
-    return _send_with_retry(contract_func, value, gas, wait, retry_count=0)
+    return _send_with_retry(
+        contract_func,
+        value=value,
+        gas=gas,
+        wait=wait,
+        override_nonce=None,
+        gas_multiplier=GAS_PRICE_MULTIPLIER,
+        attempt=0,
+    )
 
 
-def _send_with_retry(contract_func, value, gas, wait, retry_count):
+def _send_with_retry(
+    contract_func,
+    *,
+    value,
+    gas,
+    wait,
+    override_nonce,
+    gas_multiplier,
+    attempt,
+):
+    if attempt >= MAX_RETRIES:
+        raise RuntimeError(f"send_tx exceeded {MAX_RETRIES} retries")
+
     w3 = get_w3()
     acct = get_account()
-    base_gas_price = w3.eth.gas_price
-    multiplier = (
-        GAS_PRICE_RETRY_MULTIPLIER if retry_count > 0 else GAS_PRICE_MULTIPLIER
+
+    nonce = (
+        override_nonce
+        if override_nonce is not None
+        else w3.eth.get_transaction_count(acct.address, "pending")
     )
-    gas_price = int(base_gas_price * multiplier)
+    gas_price = int(w3.eth.gas_price * gas_multiplier)
 
     tx = contract_func.build_transaction({
         "from": acct.address,
-        "nonce": w3.eth.get_transaction_count(acct.address, "pending"),
+        "nonce": nonce,
         "value": value,
         "chainId": settings.chain_id,
         "gas": gas,
@@ -74,21 +107,42 @@ def _send_with_retry(contract_func, value, gas, wait, retry_count):
         tx_hash = w3.eth.send_raw_transaction(raw).hex()
     except Exception as e:
         msg = str(e).lower()
-        if "replacement transaction underpriced" in msg and retry_count == 0:
-            print(
-                f"[send_tx] underpriced; retrying at "
-                f"{GAS_PRICE_RETRY_MULTIPLIER}x gas price",
+
+        # Nonce stale — parse expected nonce from the error and re-sign.
+        if "nonce too low" in msg or "nonce is too low" in msg:
+            m = NONCE_RE.search(str(e))
+            if m:
+                expected = int(m.group(1))
+                print(f"[send_tx] nonce stale ({nonce}); using expected nonce {expected}")
+            else:
+                expected = nonce + 1
+                print(f"[send_tx] nonce stale ({nonce}); incrementing to {expected}")
+            time.sleep(1)
+            return _send_with_retry(
+                contract_func,
+                value=value,
+                gas=gas,
+                wait=wait,
+                override_nonce=expected,
+                gas_multiplier=gas_multiplier,
+                attempt=attempt + 1,
             )
-            return _send_with_retry(contract_func, value, gas, wait, retry_count + 1)
-        # Mantle Sepolia's RPC pending-nonce can lag the just-mined receipt
-        # by a few hundred ms. The next get_transaction_count(..., "pending")
-        # then returns a stale value and the tx is rejected as too low.
-        # Short pause + re-query nonce + retry.
-        if "nonce too low" in msg and retry_count == 0:
-            print("[send_tx] nonce stale; sleeping 2s then retrying")
-            import time as _t
-            _t.sleep(2)
-            return _send_with_retry(contract_func, value, gas, wait, retry_count + 1)
+
+        # Same-nonce conflict — bump gas to displace the stuck tx.
+        if "replacement transaction underpriced" in msg or "underpriced" in msg:
+            new_mult = max(gas_multiplier * 1.3, GAS_PRICE_RETRY_MULTIPLIER)
+            print(f"[send_tx] underpriced; gas multiplier {gas_multiplier} → {new_mult}")
+            time.sleep(1)
+            return _send_with_retry(
+                contract_func,
+                value=value,
+                gas=gas,
+                wait=wait,
+                override_nonce=override_nonce,
+                gas_multiplier=new_mult,
+                attempt=attempt + 1,
+            )
+
         raise
 
     if not wait:
