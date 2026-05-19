@@ -30,7 +30,7 @@ def execute(agent_id: int) -> dict:
                     [(_symbol_to_address(s), w) for s, w in targets],
                     proof,
                 )
-            )
+            )["tx_hash"]
         except Exception:
             # Mandate breach possible — notify registry (reputation slash).
             try:

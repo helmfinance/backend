@@ -74,10 +74,9 @@ def check_environment() -> None:
     print(f"[env] USDC balance: {usdc_bal / 1e6:.2f}")
     if usdc_bal < 200_000_000:
         print("[env] minting 1000 USDC to executor...")
-        tx = send_tx(usdc().functions.mint(address(), 1_000_000_000))
-        # Block on receipt so the nonce is reflected by the sequencer before
-        # any subsequent step calls send_tx (avoids "nonce too low" races).
-        w3.eth.wait_for_transaction_receipt(tx, timeout=60)
+        # send_tx waits for receipt by default; nonce is reflected by the
+        # sequencer before any subsequent step calls send_tx.
+        send_tx(usdc().functions.mint(address(), 1_000_000_000))
 
     print(f"[env] last indexed block: {_last_indexed()}")
 
@@ -149,7 +148,6 @@ def step1_register_agent() -> int:
     send_tx(usdc().functions.approve(
         Web3.to_checksum_address(settings.helm_registry), seed_amount,
     ))
-    time.sleep(3)
 
     # AssetEntry tuples (address, AssetKind)
     assets = [
@@ -162,7 +160,7 @@ def step1_register_agent() -> int:
         (Web3.to_checksum_address(settings.ondo_usdy_adapter), 4000, 6000),
     ]
 
-    tx_hash = send_tx(
+    result = send_tx(
         registry().functions.registerAgent(
             mandate_hash if mandate_hash.startswith("0x")
             else "0x" + mandate_hash,
@@ -173,12 +171,12 @@ def step1_register_agent() -> int:
         ),
         gas=3_000_000,  # Registry deploys 4 contracts — generous gas.
     )
-    print(f"[step1] registerAgent tx: {tx_hash}")
+    tx_hash = result["tx_hash"]
+    print(f"[step1] registerAgent tx: {tx_hash} (block {result['block_number']})")
 
-    receipt = get_w3().eth.wait_for_transaction_receipt(tx_hash, timeout=90)
-    assert receipt["status"] == 1, f"registerAgent reverted: {tx_hash}"
-
-    # Decode AgentRegistered event from receipt
+    # Decode AgentRegistered event from receipt (send_tx already waited +
+    # asserted status=1, but we still need the receipt for log parsing).
+    receipt = get_w3().eth.get_transaction_receipt(tx_hash)
     logs = registry().events.AgentRegistered().process_receipt(receipt)
     assert logs, "no AgentRegistered event in receipt"
     agent_id = logs[0]["args"]["agentId"]
@@ -222,25 +220,20 @@ def step2_deposit(agent_id: int, amount_usdc: int) -> None:
             pyth_adapter().functions.updatePriceFeeds(update_data_bytes),
             value=pyth_fee,
         )
-        time.sleep(3)
 
     # Approve USDC → vault
     send_tx(usdc().functions.approve(
         Web3.to_checksum_address(vault_addr), amount_usdc,
     ))
-    time.sleep(3)
 
     # ERC-4626 deposit(assets, receiver). No Pyth bytes; vault reads from
     # the cached adapter.
     vault = agent_vault(vault_addr)
-    tx_hash = send_tx(
+    result = send_tx(
         vault.functions.deposit(amount_usdc, address()),
         gas=800_000,
     )
-    print(f"[step2] deposit tx: {tx_hash}")
-
-    receipt = get_w3().eth.wait_for_transaction_receipt(tx_hash, timeout=60)
-    assert receipt["status"] == 1, f"deposit reverted: {tx_hash}"
+    print(f"[step2] deposit tx: {result['tx_hash']} (block {result['block_number']})")
 
     addr_lower = address().lower()
     wait_for_indexer(
@@ -272,14 +265,11 @@ def _nav_history_count(agent_id: int) -> int:
 def step3_advance_phase(agent_id: int) -> None:
     thirty_one_days = 31 * 86400
     send_tx(time_provider().functions.advance(thirty_one_days))
-    time.sleep(3)
     new_time = time_provider().functions.currentTime().call()
     print(f"[step3] advanced 31d, new currentTime: {new_time}")
 
-    tx_hash = send_tx(registry().functions.advanceToPublic(agent_id))
-    print(f"[step3] advanceToPublic tx: {tx_hash}")
-    receipt = get_w3().eth.wait_for_transaction_receipt(tx_hash, timeout=60)
-    assert receipt["status"] == 1, f"advanceToPublic reverted: {tx_hash}"
+    result = send_tx(registry().functions.advanceToPublic(agent_id))
+    print(f"[step3] advanceToPublic tx: {result['tx_hash']}")
 
     wait_for_indexer(
         lambda: _agent_phase(agent_id) == "PublicLaunch",

@@ -24,8 +24,8 @@ def run(agent_id: int) -> dict:
             return {"tx_hash": None, "amount": 0, "note": "no yield to distribute"}
 
         d = dividend_distributor()
-        stage_tx = send_tx(d.functions.stageYield(agent_id, amount))
-        dist_tx = send_tx(d.functions.distribute(agent_id))
+        stage_tx = send_tx(d.functions.stageYield(agent_id, amount))["tx_hash"]
+        dist_tx = send_tx(d.functions.distribute(agent_id))["tx_hash"]
         return {
             "stage_tx_hash": stage_tx,
             "distribute_tx_hash": dist_tx,

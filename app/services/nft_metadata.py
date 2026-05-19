@@ -36,5 +36,5 @@ def update(agent_id: int) -> dict:
         ipfs_uri, _pinned = pin_mandate(metadata, fake_hash)
         tx_hash = send_tx(
             agent_nft().functions.setTokenURI(agent_id, ipfs_uri),
-        )
+        )["tx_hash"]
         return {"tx_hash": tx_hash, "uri": ipfs_uri}

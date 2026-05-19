@@ -709,7 +709,7 @@ def admin_time_advance(req: TimeAdvanceRequest, response: Response) -> TimeAdvan
     response.headers["Cache-Control"] = "no-store"
     _check_testnet()
     try:
-        tx_hash = send_tx(time_provider().functions.advance(req.seconds))
+        tx_hash = send_tx(time_provider().functions.advance(req.seconds))["tx_hash"]
         new_time = time_provider().functions.currentTime().call()
         return TimeAdvanceResponse(
             tx_hash=tx_hash,
@@ -742,7 +742,7 @@ def admin_mint_usdc(req: MintUsdcRequest, response: Response) -> MintUsdcRespons
             ).model_dump(by_alias=True))
         tx_hash = send_tx(usdc().functions.mint(
             Web3.to_checksum_address(req.to), amount
-        ))
+        ))["tx_hash"]
         return MintUsdcResponse(
             tx_hash=tx_hash,
             to=req.to.lower(),
