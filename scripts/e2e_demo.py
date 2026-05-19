@@ -72,11 +72,13 @@ def check_environment() -> None:
 
     usdc_bal = usdc().functions.balanceOf(address()).call()
     print(f"[env] USDC balance: {usdc_bal / 1e6:.2f}")
-    if usdc_bal < 200_000_000:
-        print("[env] minting 1000 USDC to executor...")
+    # Need MIN_SEED_USDC (1000) for registerAgent + ≥10 for deposit. Mint
+    # 2000 with headroom when balance is below 1200.
+    if usdc_bal < 1_200_000_000:
+        print("[env] minting 2000 USDC to executor...")
         # send_tx waits for receipt by default; nonce is reflected by the
         # sequencer before any subsequent step calls send_tx.
-        send_tx(usdc().functions.mint(address(), 1_000_000_000))
+        send_tx(usdc().functions.mint(address(), 2_000_000_000))
 
     print(f"[env] last indexed block: {_last_indexed()}")
 
@@ -142,7 +144,10 @@ def step1_register_agent() -> int:
     print(f"[step1] mandate_hash: {mandate_hash}")
     print(f"[step1] mandate_uri: {mandate_uri}")
 
-    seed_amount = 100_000_000  # 100 USDC
+    # MIN_SEED_USDC = 1_000e6 (HelmRegistry.sol:23). Anything less reverts
+    # with InsufficientSeed(). Verified via debug_register_revert on
+    # 2026-05-19 (tx 0x927f8498… selector 0x03ca7e96).
+    seed_amount = 1_000_000_000  # 1000 USDC
 
     # Approve seed USDC to registry
     send_tx(usdc().functions.approve(

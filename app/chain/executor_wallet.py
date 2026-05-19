@@ -80,6 +80,15 @@ def _send_with_retry(contract_func, value, gas, wait, retry_count):
                 f"{GAS_PRICE_RETRY_MULTIPLIER}x gas price",
             )
             return _send_with_retry(contract_func, value, gas, wait, retry_count + 1)
+        # Mantle Sepolia's RPC pending-nonce can lag the just-mined receipt
+        # by a few hundred ms. The next get_transaction_count(..., "pending")
+        # then returns a stale value and the tx is rejected as too low.
+        # Short pause + re-query nonce + retry.
+        if "nonce too low" in msg and retry_count == 0:
+            print("[send_tx] nonce stale; sleeping 2s then retrying")
+            import time as _t
+            _t.sleep(2)
+            return _send_with_retry(contract_func, value, gas, wait, retry_count + 1)
         raise
 
     if not wait:
