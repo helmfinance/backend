@@ -50,6 +50,7 @@ from app.hermes.client import (
 )
 from app.mandate.hash import compute_mandate_hash
 from app.mandate.ipfs import pin_mandate
+from app.repos.mandates import upsert_mandate_blob
 from app.services import distribute, harvest, nft_metadata, rebalance
 
 # AssetKind enum (IAgentVault.sol):
@@ -143,6 +144,21 @@ def step1_register_agent() -> int:
     mandate_uri, _ = pin_mandate(mandate_json, mandate_hash)
     print(f"[step1] mandate_hash: {mandate_hash}")
     print(f"[step1] mandate_uri: {mandate_uri}")
+
+    # Mirror /mandate/parse's DB write so the indexer's
+    # handle_agent_registered can resolve the hash → mandate body.
+    # Without this, agent.mandate stays {} and downstream consumers
+    # (rebalance / /agents detail) break.
+    with SessionLocal() as db:
+        upsert_mandate_blob(
+            db,
+            mandate_hash=mandate_hash,
+            mandate_dict=mandate_json,
+            raw_text="(e2e demo agent)",
+            ipfs_uri=mandate_uri,
+            pinned=False,
+        )
+    print("[step1] mandate blob inserted")
 
     # MIN_SEED_USDC = 1_000e6 (HelmRegistry.sol:23). Anything less reverts
     # with InsufficientSeed(). Verified via debug_register_revert on
