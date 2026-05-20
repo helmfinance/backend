@@ -203,6 +203,11 @@ class MandateSchema(HelmModel):
     max_single_position_bps: BasisPoints
     emergency_exit_conditions: list[str]
 
+    # Marketplace flavor — optional, LLM-inferred from asset mix and tone.
+    # Explicit alias keeps the acronym in camelCase (auto-generator → "Apy").
+    expected_yield_apy: str | None = Field(default=None, alias="expectedYieldAPY")
+    personality_hint: str | None = None
+
 
 class MandateParseRequest(HelmModel):
     natural_language_mandate: Annotated[str, Field(min_length=10, max_length=5000)]

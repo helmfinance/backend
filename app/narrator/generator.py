@@ -44,6 +44,33 @@ DO NOT include:
 - Generic "thank you" sign-offs
 """
 
+PERSONALITY_TONE = {
+    "growth-aggressive":
+        "Confident, conviction-driven. Use action words. Decisive.",
+    "conservative-stable":
+        "Measured, analytical. Risk-first framing. Cautious.",
+    "balanced-moderate":
+        "Even-handed, pragmatic. Equal weight to risks and opportunities.",
+    "contrarian-value":
+        "Skeptical of consensus. Identify mispricings. Patient.",
+    "yield-focused":
+        "Income-focused. Emphasize distributions and stability over price action.",
+}
+
+
+def _build_system_prompt(agent: models.Agent) -> str:
+    mandate = agent.mandate or {}
+    personality = (
+        mandate.get("personalityHint") or mandate.get("personality_hint")
+    )
+    if not personality:
+        return SYSTEM_PROMPT
+    tone = PERSONALITY_TONE.get(
+        personality,
+        f"Personality: {personality}. Adapt tone accordingly.",
+    )
+    return f"{SYSTEM_PROMPT}\n\nPersonality: {personality}\nTone guidance: {tone}"
+
 
 def iso_week_start_utc(now: int) -> int:
     d = dt.datetime.fromtimestamp(now, tz=dt.UTC)
@@ -164,7 +191,7 @@ def generate_note(
     user_message = _build_user_message(
         agent, decisions, nav_start, nav_end, return_bps
     )
-    body_markdown = llm(SYSTEM_PROMPT, user_message)
+    body_markdown = llm(_build_system_prompt(agent), user_message)
 
     existing = db.execute(
         select(models.NarratorNote).where(

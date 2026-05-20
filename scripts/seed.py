@@ -102,6 +102,8 @@ def _agent1_mandate() -> dict:
             "drawdown > 25% over 7d",
             "Pyth feed stale > 60s",
         ],
+        "expected_yield_apy": "3-4% APY (mETH staking + minor USDY)",
+        "personality_hint": "growth-aggressive",
     }
 
 
@@ -128,6 +130,8 @@ def _agent2_mandate() -> dict:
         "max_leverage": 1.0,
         "max_single_position_bps": 6000,
         "emergency_exit_conditions": ["drawdown > 15% over 14d"],
+        "expected_yield_apy": "4-5% APY (heavy USDY + tech dividend)",
+        "personality_hint": "yield-focused",
     }
 
 

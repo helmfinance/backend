@@ -44,6 +44,26 @@ DEFAULT INFERENCE (when user doesn't specify):
 - maxSinglePositionBps: based on universe size, default 2500
 - weightConstraints: derive from user-stated targets, with ±200bps band
 
+MARKETPLACE FLAVOR (you MUST populate these two fields):
+
+- expectedYieldAPY: a short string estimating the annual yield this strategy
+  produces. Format: "X-Y% APY ({brief reasoning})".
+  Base estimate on the asset mix:
+  - USDY heavy (>30% target weight) → 3-5% APY (T-bill rates)
+  - mETH heavy → 3-4% APY from staking
+  - synthetic equity heavy → "0.5% APY (capital gain focused, low yield)"
+  - mix → blended estimate
+  Examples: "4-5% APY (USDY + mETH staking)", "0.5% APY (capital gain focused)"
+
+- personalityHint: a 1-2 word hyphenated descriptor reflecting the agent's
+  strategy character. Prefer one of these exact values:
+  - "growth-aggressive": high equity, willing to take risk
+  - "conservative-stable": yield-heavy, low volatility
+  - "balanced-moderate": mixed asset classes
+  - "contrarian-value": defensive, counter-trend
+  - "yield-focused": prioritizes USDC dividend over capital gain
+  If none fit, invent a similar 1-2 word hyphenated descriptor.
+
 Use the set_mandate tool with the parsed mandate. Always include all required fields."""
 
 
