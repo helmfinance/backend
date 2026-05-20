@@ -113,6 +113,25 @@ def to_wind_down_state(wd: db_models.WindDownState) -> schemas.WindDownState:
     )
 
 
+def _mandate_get(mandate: dict, *keys, default=None):
+    """First non-empty value across alternate keys (snake_case vs camelCase)."""
+    for k in keys:
+        v = mandate.get(k)
+        if v:
+            return v
+    return default
+
+
+def _safe_enum_list(values, enum_cls):
+    out = []
+    for v in values or []:
+        try:
+            out.append(enum_cls(v))
+        except ValueError:
+            continue
+    return out
+
+
 def _summary_kwargs(
     a: db_models.Agent,
     *,
@@ -121,6 +140,7 @@ def _summary_kwargs(
     apy_7d_bps: int | None,
     holder_count: int,
 ) -> dict:
+    mandate = a.mandate or {}
     return {
         "agent_id": a.agent_id,
         "name": a.name,
@@ -138,9 +158,15 @@ def _summary_kwargs(
         "apy_30d_bps": apy_30d_bps,
         "apy_7d_bps": apy_7d_bps,
         "reputation": a.reputation,
-        "strategy": a.mandate["description"],
-        "asset_classes": [schemas.AssetClass(c) for c in a.mandate["asset_classes"]],
-        "allowed_lockups": [schemas.LockupTier(lk) for lk in a.mandate["allowed_lockups"]],
+        "strategy": _mandate_get(mandate, "description", default=""),
+        "asset_classes": _safe_enum_list(
+            _mandate_get(mandate, "asset_classes", "assetClasses", default=[]),
+            schemas.AssetClass,
+        ),
+        "allowed_lockups": _safe_enum_list(
+            _mandate_get(mandate, "allowed_lockups", "allowedLockups", default=[]),
+            schemas.LockupTier,
+        ),
         "thumbnail_url": a.thumbnail_url,
         "created_at": a.created_at,
     }

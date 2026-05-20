@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import random
 import time
 
 from sqlalchemy import delete
@@ -197,23 +198,29 @@ def _seed_agent1(db, now: int) -> None:
             )
         )
 
-    # NAV history: 30 days, 1.000 → 1.043
-    start_nav = 1_000_000
-    end_nav = 1_043_000
-    days = 30
-    for i in range(days + 1):
-        ts = public_launch_at + i * 86400
-        nav_ps = start_nav + (end_nav - start_nav) * i // days
-        nav_usdc = total_shares * nav_ps // SHARES
-        db.add(
-            NavPoint(
-                agent_id=9001,
-                timestamp=ts,
-                nav_usdc=str(nav_usdc),
-                nav_per_share_usdc=str(nav_ps),
-                total_shares=str(total_shares),
+    # NAV history: 8 weeks × 7 days = 56 daily samples.
+    # Per-day drift + gaussian noise + week-3 drawdown → realistic Sharpe and non-zero maxDD.
+    rng = random.Random(9001)
+    nav_ps = 1_000_000  # 1.0 in 6-decimal
+    week_start_ts = public_launch_at - 56 * 86400  # 8 weeks before today
+    for week in range(8):
+        weekly_drift = 0.010 + rng.gauss(0, 0.003)  # ~+1% mean, σ=0.3%
+        if week == 3:
+            weekly_drift -= 0.025  # shock — drawdown event
+        for day in range(7):
+            daily_return = weekly_drift / 7 + rng.gauss(0, 0.0025)  # σ≈0.25%/day
+            nav_ps = max(1, int(nav_ps * (1 + daily_return)))
+            ts = week_start_ts + (week * 7 + day) * 86400
+            nav_usdc = total_shares * nav_ps // SHARES
+            db.add(
+                NavPoint(
+                    agent_id=9001,
+                    timestamp=ts,
+                    nav_usdc=str(nav_usdc),
+                    nav_per_share_usdc=str(nav_ps),
+                    total_shares=str(total_shares),
+                )
             )
-        )
 
     # 5 decisions: 3 rebalance, 1 harvest, 1 distribute
     decisions_spec = [
@@ -419,13 +426,14 @@ def _seed_agent2(db, now: int) -> None:
             )
         )
 
-    # NAV history, 12 days
-    start_nav = 1_000_000
-    end_nav = 1_005_000
-    days = 12
-    for i in range(days + 1):
+    # NAV history: 12 daily samples with mild drift + noise (still Incubation, so
+    # short series — Sharpe will be None for <10 samples).
+    rng = random.Random(9002)
+    nav_ps = 1_000_000
+    for i in range(13):
         ts = incubation_start + i * 86400
-        nav_ps = start_nav + (end_nav - start_nav) * i // days
+        daily_return = 0.0005 + rng.gauss(0, 0.003)
+        nav_ps = max(1, int(nav_ps * (1 + daily_return)))
         nav_usdc = total_shares * nav_ps // SHARES
         db.add(
             NavPoint(
