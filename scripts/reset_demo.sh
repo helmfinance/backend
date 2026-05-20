@@ -2,6 +2,8 @@
 # Reset demo state: wipe DB + IPFS stub + restart uvicorn with fresh seed.
 # Usage: bash scripts/reset_demo.sh
 
+source .venv/bin/activate 2>/dev/null || true
+
 set -e
 
 cd "$(dirname "$0")/.."
