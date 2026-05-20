@@ -439,7 +439,7 @@ class BenchmarkResponse(HelmModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Mandate condition evaluation (Bybit-backed DSL)
+# Mandate condition evaluation (CoinGecko-backed DSL)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ConditionResult(HelmModel):

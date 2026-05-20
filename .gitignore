@@ -73,3 +73,6 @@ logs/
 scratch/
 tmp/
 data/
+
+# FE-generated OpenAPI types (should live in FE repo)
+types.ts
