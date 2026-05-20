@@ -371,7 +371,9 @@ class AgentSummary(HelmModel):
 
 
 class AgentDetail(AgentSummary):
-    mandate: MandateSchema
+    # Optional — empty/invalid mandate JSON (e.g. indexed agent whose mandate
+    # IPFS blob hasn't been fetched yet) surfaces as null instead of 500.
+    mandate: MandateSchema | None = None
     mandate_uri: str
     mandate_hash: Hex
 
@@ -379,7 +381,9 @@ class AgentDetail(AgentSummary):
     cash_usdc: BigIntString
     yield_pool: BigIntString
 
-    founder_vault: FounderVaultSnapshot
+    # Optional — real-chain agent may exist before its FounderVault row is
+    # indexed; serve null rather than 500 in that window.
+    founder_vault: FounderVaultSnapshot | None = None
 
     recent_dividends: list[DividendEpoch]
     recent_decisions: list[Decision]

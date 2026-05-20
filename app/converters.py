@@ -209,6 +209,17 @@ def to_agent_detail(
     latest_narrator_note: db_models.NarratorNote | None,
     redemption_queue: dict,
 ) -> schemas.AgentDetail:
+    mandate_schema: schemas.MandateSchema | None = None
+    if a.mandate:
+        try:
+            mandate_schema = schemas.MandateSchema.model_validate(a.mandate)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                "[converters] agent %s mandate validation failed: %s",
+                a.agent_id, e,
+            )
+
     return schemas.AgentDetail(
         **_summary_kwargs(
             a,
@@ -217,13 +228,13 @@ def to_agent_detail(
             apy_7d_bps=apy_7d_bps,
             holder_count=holder_count,
         ),
-        mandate=schemas.MandateSchema.model_validate(a.mandate),
+        mandate=mandate_schema,
         mandate_uri=a.mandate_uri,
         mandate_hash=a.mandate_hash,
         positions=[to_position(p) for p in a.positions],
         cash_usdc="0",
         yield_pool="0",
-        founder_vault=to_founder_vault_snapshot(a.founder_vault),
+        founder_vault=to_founder_vault_snapshot(a.founder_vault) if a.founder_vault else None,
         recent_dividends=[to_dividend_epoch(d) for d in recent_dividends],
         recent_decisions=[to_decision(d) for d in recent_decisions],
         latest_narrator_note=(
