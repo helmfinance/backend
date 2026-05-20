@@ -57,11 +57,18 @@ def to_decision(d: db_models.Decision) -> schemas.Decision:
         if d.harvested_from_sources is not None
         else None
     )
+    # Legacy DB rows may have stored tx_hash without the 0x prefix (some
+    # eth-account hex() paths). Decision.tx_hash schema requires the prefix,
+    # so normalize here on read.
+    tx_hash = d.tx_hash
+    if tx_hash and not tx_hash.startswith("0x"):
+        tx_hash = "0x" + tx_hash
+
     return schemas.Decision(
         id=d.id,
         type=schemas.DecisionType(d.type),
         timestamp=d.timestamp,
-        tx_hash=d.tx_hash,
+        tx_hash=tx_hash,
         block_number=d.block_number,
         summary=d.summary,
         before_positions=before,
