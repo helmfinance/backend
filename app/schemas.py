@@ -321,6 +321,15 @@ class DividendEpoch(HelmModel):
 # Agent — summary + detail
 # ─────────────────────────────────────────────────────────────────────────────
 
+class AgentPerformance(HelmModel):
+    total_return: float | None = None         # 0.184 = +18.4%
+    max_drawdown: float | None = None         # -0.072 = -7.2%
+    sharpe_ratio: float | None = None         # None if insufficient samples
+    sample_count: int
+    period_start: UnixSeconds | None = None
+    period_end: UnixSeconds | None = None
+
+
 class AgentSummary(HelmModel):
     agent_id: int
     name: str
@@ -349,14 +358,7 @@ class AgentSummary(HelmModel):
     thumbnail_url: str | None = None
     created_at: UnixSeconds
 
-
-class AgentPerformance(HelmModel):
-    total_return: float | None = None         # 0.184 = +18.4%
-    max_drawdown: float | None = None         # -0.072 = -7.2%
-    sharpe_ratio: float | None = None         # None if insufficient samples
-    sample_count: int
-    period_start: UnixSeconds | None = None
-    period_end: UnixSeconds | None = None
+    performance: AgentPerformance | None = None  # additive
 
 
 class AgentDetail(AgentSummary):
@@ -376,8 +378,6 @@ class AgentDetail(AgentSummary):
 
     redemption_queue: RedemptionQueueSnapshot
     wind_down: WindDownState | None = None
-
-    performance: AgentPerformance | None = None  # additive
 
 
 # ─────────────────────────────────────────────────────────────────────────────

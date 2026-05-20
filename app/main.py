@@ -146,7 +146,10 @@ def list_agents(
     phase: list[AgentPhase] | None = Query(None),
     asset_class: list[AssetClass] | None = Query(None, alias="assetClass"),
     lockup: list[LockupTier] | None = Query(None),
-    sort: str = Query("apy_30d", description="apy_30d|apy_7d|nav|holders|newest|reputation"),
+    sort: str = Query(
+        "apy_30d",
+        description="apy_30d|apy_7d|nav|holders|newest|created_at|reputation|sharpe|total_return|max_drawdown",
+    ),
     order: str = Query("desc", description="asc|desc"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
@@ -162,16 +165,19 @@ def list_agents(
         limit=limit,
         offset=offset,
     )
-    items = [
-        converters.to_agent_summary(
+    items = []
+    for a in rows:
+        summary = converters.to_agent_summary(
             a,
             current_nav=agent_repo.get_latest_nav(db, a.agent_id),
             apy_30d_bps=agent_repo.compute_apy_bps(db, a.agent_id, 30),
             apy_7d_bps=agent_repo.compute_apy_bps(db, a.agent_id, 7),
             holder_count=agent_repo.compute_holder_count(db, a.agent_id),
         )
-        for a in rows
-    ]
+        summary.performance = AgentPerformance(
+            **analytics_repo.compute_performance(db, a.agent_id)
+        )
+        items.append(summary)
     return Page[AgentSummary](items=items, total=total, limit=limit, offset=offset)
 
 

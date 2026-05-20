@@ -70,9 +70,27 @@ def list_agents(
                 with_val.append((a, v))
         with_val.sort(key=lambda t: t[1], reverse=descending)
         rows = [t[0] for t in with_val] + none_val
+    elif sort in ("sharpe", "total_return", "max_drawdown"):
+        from app.repos import analytics  # avoid top-level cycle risk
+
+        perf_key = {
+            "sharpe": "sharpe_ratio",
+            "total_return": "total_return",
+            "max_drawdown": "max_drawdown",
+        }[sort]
+        with_perf: list[tuple[Agent, float]] = []
+        no_perf: list[Agent] = []
+        for a in rows:
+            v = analytics.compute_performance(db, a.agent_id).get(perf_key)
+            if v is None:
+                no_perf.append(a)
+            else:
+                with_perf.append((a, v))
+        with_perf.sort(key=lambda t: t[1], reverse=descending)
+        rows = [t[0] for t in with_perf] + no_perf
     else:
         def key(a: Agent):
-            if sort == "newest":
+            if sort in ("newest", "created_at"):
                 return a.created_at
             if sort == "reputation":
                 return a.reputation
