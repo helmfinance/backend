@@ -365,6 +365,10 @@ class AgentSummary(HelmModel):
 
     performance: AgentPerformance | None = None  # additive
 
+    # Simulated secondary-market price (NAV × reputation premium factor)
+    market_price_per_share_usdc: BigIntString | None = None
+    reputation_premium_bps: int | None = None  # signed: +ve premium, -ve discount
+
 
 class AgentDetail(AgentSummary):
     mandate: MandateSchema

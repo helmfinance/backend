@@ -140,7 +140,11 @@ def _summary_kwargs(
     apy_7d_bps: int | None,
     holder_count: int,
 ) -> dict:
+    from app.repos.analytics import compute_market_price
+
     mandate = a.mandate or {}
+    nav_per_share = current_nav.nav_per_share_usdc if current_nav else None
+    market_price, premium_bps = compute_market_price(nav_per_share, a.reputation)
     return {
         "agent_id": a.agent_id,
         "name": a.name,
@@ -169,6 +173,8 @@ def _summary_kwargs(
         ),
         "thumbnail_url": a.thumbnail_url,
         "created_at": a.created_at,
+        "market_price_per_share_usdc": str(market_price) if market_price is not None else None,
+        "reputation_premium_bps": premium_bps,
     }
 
 

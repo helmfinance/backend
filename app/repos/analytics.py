@@ -74,4 +74,28 @@ def compute_performance(db: Session, agent_id: int) -> dict:
     }
 
 
-__all__ = ["compute_performance"]
+def compute_market_price(
+    nav_per_share_usdc: int | str | None,
+    reputation: int | None,
+) -> tuple[int | None, int | None]:
+    """Simulated secondary-market price with reputation premium.
+
+    Returns (market_price_per_share, premium_bps) or (None, None) when NAV is
+    missing or zero. Formula::
+
+        premium_factor = (reputation / 10000 - 0.5) * 0.2  # -10% to +10%
+        market_price   = nav * (1 + premium_factor)
+    """
+    if nav_per_share_usdc is None:
+        return None, None
+    nav = int(nav_per_share_usdc) if isinstance(nav_per_share_usdc, str) else nav_per_share_usdc
+    if nav == 0:
+        return None, None
+    rep = reputation if reputation is not None else 5000
+    premium_factor = (rep / 10000 - 0.5) * 0.2
+    market_price = int(nav * (1 + premium_factor))
+    premium_bps = int(premium_factor * 10000)
+    return market_price, premium_bps
+
+
+__all__ = ["compute_performance", "compute_market_price"]
