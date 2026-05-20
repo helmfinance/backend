@@ -407,6 +407,34 @@ class NavHistoryResponse(HelmModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Benchmark comparison (agent NAV vs naive baselines)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class BenchmarkPoint(HelmModel):
+    timestamp: UnixSeconds
+    agent: float          # normalized (starts at 1.0)
+    sspy: float
+    sixty_forty: float
+
+
+class BenchmarkSummary(HelmModel):
+    agent_return: float           # 0.0277 = +2.77%
+    sspy_return: float
+    sixty_forty_return: float
+    alpha_vs_sspy: float          # agent - sspy
+    alpha_vs_sixty_forty: float
+
+
+class BenchmarkResponse(HelmModel):
+    agent_id: int
+    period_start: UnixSeconds | None = None
+    period_end: UnixSeconds | None = None
+    sample_count: int
+    series: list[BenchmarkPoint]
+    summary: BenchmarkSummary | None = None  # None when < 2 samples
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Holders
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -704,6 +732,7 @@ __all__ = [
     "NarratorPerformance", "NarratorNote",
     "DividendEpoch",
     "NavPoint", "NavHistoryResponse",
+    "BenchmarkPoint", "BenchmarkSummary", "BenchmarkResponse",
     "Holder",
     "DividendClaim", "RedemptionRequest",
     "MintPreviewRequest", "MintPreviewResponse", "SyntheticPricePreview",

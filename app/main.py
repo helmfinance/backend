@@ -40,12 +40,14 @@ from app.mandate.hash import compute_mandate_hash
 from app.mandate.ipfs import pin_mandate
 from app.repos import agents as agent_repo
 from app.repos import analytics as analytics_repo
+from app.repos import benchmark as benchmark_repo
 from app.repos import mandates as mandates_repo
 from app.repos import portfolio as portfolio_repo
 from app.schemas import (
     AdminDistributeResponse, AdminHarvestResponse,
     AdminNftMetadataResponse, AdminRebalanceResponse,
     AgentDetail, AgentPerformance, AgentPhase, AgentSummary, ApiError, ApiErrorCode, AssetClass,
+    BenchmarkPoint, BenchmarkResponse, BenchmarkSummary,
     QualificationCriterion, QualificationResponse,
     ContractAddresses, Decision, DecisionType, FeeRates, HealthResponse,
     LockupTier, MandateParseRequest, MandateParseResponse, MandateSchema,
@@ -238,6 +240,28 @@ def get_nav_history(
         for p in agent_repo.get_nav_history(db, agent_id, period)
     ]
     return NavHistoryResponse(points=points, period=period, granularity=actual)
+
+
+@app.get(
+    "/agents/{agent_id}/benchmark",
+    response_model=BenchmarkResponse,
+    responses={404: {"model": ApiError}},
+    dependencies=[Depends(cache_for(60))],
+    summary="Agent NAV vs sSPY and 60/40 baselines (synthetic constant growth)",
+    tags=["agents"],
+)
+def get_benchmark(agent_id: int, db: Session = Depends(get_db)):
+    if agent_repo.get_agent(db, agent_id) is None:
+        raise _api_error(404, ApiErrorCode.NotFound, f"Agent {agent_id} not found")
+    result = benchmark_repo.compute_benchmark_series(db, agent_id)
+    return BenchmarkResponse(
+        agent_id=agent_id,
+        period_start=result["period_start"],
+        period_end=result["period_end"],
+        sample_count=result["sample_count"],
+        series=[BenchmarkPoint(**p) for p in result["series"]],
+        summary=BenchmarkSummary(**result["summary"]) if result["summary"] else None,
+    )
 
 
 @app.get(
