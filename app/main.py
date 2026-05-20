@@ -39,12 +39,13 @@ from app.mandate import parser, rules
 from app.mandate.hash import compute_mandate_hash
 from app.mandate.ipfs import pin_mandate
 from app.repos import agents as agent_repo
+from app.repos import analytics as analytics_repo
 from app.repos import mandates as mandates_repo
 from app.repos import portfolio as portfolio_repo
 from app.schemas import (
     AdminDistributeResponse, AdminHarvestResponse,
     AdminNftMetadataResponse, AdminRebalanceResponse,
-    AgentDetail, AgentPhase, AgentSummary, ApiError, ApiErrorCode, AssetClass,
+    AgentDetail, AgentPerformance, AgentPhase, AgentSummary, ApiError, ApiErrorCode, AssetClass,
     ContractAddresses, Decision, DecisionType, FeeRates, HealthResponse,
     LockupTier, MandateParseRequest, MandateParseResponse, MandateSchema,
     MandateValidateRequest, MandateValidateResponse, MintPreviewRequest,
@@ -186,7 +187,7 @@ def get_agent(agent_id: int, db: Session = Depends(get_db)):
     a = agent_repo.get_agent(db, agent_id)
     if a is None:
         raise _api_error(404, ApiErrorCode.NotFound, f"Agent {agent_id} not found")
-    return converters.to_agent_detail(
+    detail = converters.to_agent_detail(
         a,
         current_nav=agent_repo.get_latest_nav(db, agent_id),
         apy_30d_bps=agent_repo.compute_apy_bps(db, agent_id, 30),
@@ -197,6 +198,8 @@ def get_agent(agent_id: int, db: Session = Depends(get_db)):
         latest_narrator_note=agent_repo.get_latest_narrator_note(db, agent_id),
         redemption_queue=agent_repo.get_redemption_queue_snapshot(db, agent_id),
     )
+    detail.performance = AgentPerformance(**analytics_repo.compute_performance(db, agent_id))
+    return detail
 
 
 @app.get(

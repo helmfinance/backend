@@ -350,6 +350,15 @@ class AgentSummary(HelmModel):
     created_at: UnixSeconds
 
 
+class AgentPerformance(HelmModel):
+    total_return: float | None = None         # 0.184 = +18.4%
+    max_drawdown: float | None = None         # -0.072 = -7.2%
+    sharpe_ratio: float | None = None         # None if insufficient samples
+    sample_count: int
+    period_start: UnixSeconds | None = None
+    period_end: UnixSeconds | None = None
+
+
 class AgentDetail(AgentSummary):
     mandate: MandateSchema
     mandate_uri: str
@@ -367,6 +376,8 @@ class AgentDetail(AgentSummary):
 
     redemption_queue: RedemptionQueueSnapshot
     wind_down: WindDownState | None = None
+
+    performance: AgentPerformance | None = None  # additive
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -660,7 +671,7 @@ __all__ = [
     "MandateParseRequest", "MandateParseResponse",
     "MandateValidateRequest", "MandateValidateResponse",
     "WindDownState", "FounderVaultSnapshot", "RedemptionQueueSnapshot",
-    "AgentSummary", "AgentDetail",
+    "AgentSummary", "AgentDetail", "AgentPerformance",
     "Decision", "HarvestSource",
     "NarratorPerformance", "NarratorNote",
     "DividendEpoch",
