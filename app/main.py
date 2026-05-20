@@ -24,6 +24,7 @@ import openai
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -33,7 +34,7 @@ from sqlalchemy.orm import Session
 from app import converters
 from app.config import settings
 from app.converters import to_synthetic_price_preview
-from app.db import get_db
+from app.db import SessionLocal, get_db
 from app.hermes import client as hermes_client
 from app.mandate import parser, rules
 from app.mandate.hash import compute_mandate_hash
@@ -125,6 +126,9 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# Static smoke-test page (vanilla HTML/JS + CDN libs)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 def _todo() -> None:
@@ -908,6 +912,290 @@ def admin_nft_metadata(agent_id: int, response: Response) -> AdminNftMetadataRes
             error=ApiErrorCode.ChainUnreachable,
             message=f"nft metadata update failed: {e}",
         ).model_dump(by_alias=True)) from e
+
+
+# ─── Debug / chain-inspector endpoints (smoke-test page) ────────────────────
+
+_PHASE_NAMES = ["Incubation", "PublicLaunch", "WindDown", "Slashed", "Settled"]
+
+
+@app.get(
+    "/admin/debug/indexer-state",
+    summary="Indexer sync state vs current chain head",
+    tags=["admin"],
+)
+def debug_indexer_state(response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    from app.chain.client import get_w3
+    from app.db.models import IndexerState
+    with SessionLocal() as db:
+        state = db.query(IndexerState).first()
+    try:
+        head = get_w3().eth.block_number
+    except Exception as e:
+        raise HTTPException(503, detail=ApiError(
+            error=ApiErrorCode.ChainUnreachable,
+            message=f"chain head fetch failed: {e}",
+        ).model_dump(by_alias=True)) from e
+    last = state.last_synced_block if state else 0
+    return {
+        "chainHead": head,
+        "lastSyncedBlock": last,
+        "gap": head - last,
+        "updatedAt": state.updated_at if state else None,
+    }
+
+
+@app.get(
+    "/admin/debug/agents/{agent_id}/compare",
+    summary="Compare BE DB state vs live SC chain state for a single agent",
+    tags=["admin"],
+)
+def debug_agent_compare(agent_id: int, response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    from app.chain.client import agent_nft, agent_vault, registry
+    from app.db.models import Agent
+
+    with SessionLocal() as db:
+        agent = db.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(404, detail=ApiError(
+            error=ApiErrorCode.NotFound, message=f"Agent {agent_id} not found",
+        ).model_dump(by_alias=True))
+
+    sc: dict = {}
+
+    try:
+        sc_phase_int = registry().functions.phaseOf(agent_id).call()
+        sc["phase"] = (
+            _PHASE_NAMES[sc_phase_int]
+            if 0 <= sc_phase_int < len(_PHASE_NAMES)
+            else f"Unknown({sc_phase_int})"
+        )
+    except Exception as e:
+        sc["phase"] = f"err: {str(e)[:80]}"
+
+    try:
+        sc["totalAssets"] = str(
+            agent_vault(agent.vault_address).functions.totalAssets().call()
+        )
+    except Exception as e:
+        sc["totalAssets"] = f"err: {str(e)[:80]}"
+
+    try:
+        sc["reputation"] = agent_nft().functions.reputationOf(agent_id).call()
+    except Exception as e:
+        sc["reputation"] = f"err: {str(e)[:80]}"
+
+    try:
+        sc["tokenURI"] = agent_nft().functions.tokenURI(agent_id).call()
+    except Exception as e:
+        sc["tokenURI"] = f"err: {str(e)[:80]}"
+
+    be = {
+        "phase": agent.phase,
+        "reputation": agent.reputation,
+        "vaultAddress": agent.vault_address,
+        "tokenAddress": agent.token_address,
+        "mandateUri": agent.mandate_uri,
+    }
+
+    return {
+        "agentId": agent_id,
+        "be": be,
+        "sc": sc,
+        "consistent": {
+            "phase": str(be["phase"]) == str(sc.get("phase")),
+            "reputation": be["reputation"] == sc.get("reputation"),
+            "tokenURI": be.get("mandateUri") == sc.get("tokenURI"),
+        },
+    }
+
+
+_SYNTHETIC_SETTING_KEYS = ("snvda", "sspy", "saapl", "stsla", "smsft")
+
+
+@app.get(
+    "/admin/debug/synthetic-prices",
+    summary="Live Pyth-priced synthetic asset prices (USDC, 6-dec)",
+    tags=["admin"],
+)
+def debug_synthetic_prices(response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    from app.chain.abi_loader import load_abi
+    from app.chain.client import get_w3
+
+    w3 = get_w3()
+    abi = load_abi("SyntheticAsset")
+    out: dict[str, dict] = {}
+    for key in _SYNTHETIC_SETTING_KEYS:
+        addr = getattr(settings, key, "")
+        symbol = "s" + key[1:].upper()  # "snvda" → "sNVDA"
+        if not addr:
+            out[symbol] = {"address": "", "error": "not configured"}
+            continue
+        try:
+            c = w3.eth.contract(address=w3.to_checksum_address(addr), abi=abi)
+            price = c.functions.priceUSDC().call()
+            out[symbol] = {"address": addr, "priceUsdc": str(price)}
+        except Exception as e:
+            out[symbol] = {"address": addr, "error": str(e)[:200]}
+    return out
+
+
+@app.get(
+    "/admin/debug/adapters",
+    summary="mETH / USDY adapter live state (exchange rates, simulated APY)",
+    tags=["admin"],
+)
+def debug_adapters(response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    from app.chain.abi_loader import load_abi
+    from app.chain.client import get_w3
+
+    w3 = get_w3()
+    out: dict[str, dict] = {}
+
+    meth_addr = settings.mantle_meth_adapter
+    if meth_addr:
+        try:
+            c = w3.eth.contract(
+                address=w3.to_checksum_address(meth_addr),
+                abi=load_abi("MantleMETHAdapter"),
+            )
+            out["mEth"] = {
+                "address": meth_addr,
+                "exchangeRate": str(c.functions.exchangeRate().call()),
+                "mEthEthRatio": str(c.functions.mEthEthRatio().call()),
+                "simulatedApyBps": int(c.functions.SIMULATED_APY_BPS().call()),
+            }
+        except Exception as e:
+            out["mEth"] = {"address": meth_addr, "error": str(e)[:200]}
+    else:
+        out["mEth"] = {"address": "", "error": "not configured"}
+
+    usdy_addr = settings.ondo_usdy_adapter
+    if usdy_addr:
+        try:
+            c = w3.eth.contract(
+                address=w3.to_checksum_address(usdy_addr),
+                abi=load_abi("OndoUSDYAdapter"),
+            )
+            out["usdy"] = {
+                "address": usdy_addr,
+                "exchangeRate": str(c.functions.exchangeRate().call()),
+                "usdyPricePerShare": str(c.functions.usdyPricePerShare().call()),
+                "simulatedApyBps": int(c.functions.SIMULATED_APY_BPS().call()),
+            }
+        except Exception as e:
+            out["usdy"] = {"address": usdy_addr, "error": str(e)[:200]}
+    else:
+        out["usdy"] = {"address": "", "error": "not configured"}
+
+    return out
+
+
+@app.get(
+    "/admin/debug/treasury",
+    summary="PlatformTreasury fee rates + cumulative fees collected",
+    tags=["admin"],
+)
+def debug_treasury(response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    from app.chain.client import platform_treasury
+
+    try:
+        c = platform_treasury()
+        mint_bps, redeem_bps, rebalance_bps = c.functions.feeRates().call()
+        return {
+            "address": settings.platform_treasury,
+            "mintBps": int(mint_bps),
+            "redeemBps": int(redeem_bps),
+            "rebalanceBps": int(rebalance_bps),
+            "totalFeesCollected": str(c.functions.totalFeesCollected().call()),
+        }
+    except Exception as e:
+        return {"address": settings.platform_treasury, "error": str(e)[:200]}
+
+
+@app.get(
+    "/admin/debug/agents/{agent_id}/founder-vault",
+    summary="Live FounderVault SC state (deposits, carry, lockup, subordination)",
+    tags=["admin"],
+)
+def debug_founder_vault(agent_id: int, response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    from app.chain.abi_loader import load_abi
+    from app.chain.client import get_w3
+    from app.db.models import Agent
+
+    with SessionLocal() as db:
+        agent = db.get(Agent, agent_id)
+    if not agent or not agent.founder_vault_address:
+        raise HTTPException(404, detail=ApiError(
+            error=ApiErrorCode.NotFound,
+            message=f"FounderVault for agent {agent_id} not found",
+        ).model_dump(by_alias=True))
+
+    w3 = get_w3()
+    c = w3.eth.contract(
+        address=w3.to_checksum_address(agent.founder_vault_address),
+        abi=load_abi("FounderVault"),
+    )
+    try:
+        return {
+            "address": agent.founder_vault_address,
+            "totalDeposited": str(c.functions.totalDeposited().call()),
+            "totalWithdrawn": str(c.functions.totalWithdrawn().call()),
+            "totalSharesHeld": str(c.functions.totalSharesHeld().call()),
+            "carryBalance": str(c.functions.carryBalance().call()),
+            "lockupEndsAt": int(c.functions.lockupEndsAt().call()),
+            "cumulativeWithdrawnBps": int(c.functions.cumulativeWithdrawnBps().call()),
+            "isSubordinationActive": bool(c.functions.isSubordinationActive().call()),
+            "subordinationThresholdBps": int(c.functions.subordinationThresholdBps().call()),
+        }
+    except Exception as e:
+        return {"address": agent.founder_vault_address, "error": str(e)[:200]}
+
+
+@app.get(
+    "/admin/debug/agents/{agent_id}/redemption-queue",
+    summary="Live RedemptionQueue state for an agent (pending shares + tier allow-list)",
+    tags=["admin"],
+)
+def debug_redemption_queue(agent_id: int, response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    from app.chain.client import redemption_queue
+
+    c = redemption_queue()
+    # Tier index → human label (no on-chain TIER_DAYS function — keep in sync with FE).
+    tier_labels = {0: "instant", 1: "30d", 2: "60d", 3: "90d"}
+    tiers: list[dict] = []
+    for t, label in tier_labels.items():
+        try:
+            tiers.append({
+                "tier": t,
+                "label": label,
+                "allowed": bool(c.functions.tierAllowed(agent_id, t).call()),
+            })
+        except Exception as e:
+            tiers.append({"tier": t, "label": label, "error": str(e)[:120]})
+    try:
+        pending = c.functions.pendingForAgent(agent_id).call()
+    except Exception as e:
+        return {"agentId": agent_id, "error": str(e)[:200], "tiers": tiers}
+    return {
+        "agentId": agent_id,
+        "pendingShares": str(pending),
+        "tiers": tiers,
+    }
 
 
 def _qualification_to_response(agent_id: int, result: dict) -> QualificationResponse:

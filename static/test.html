@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Helm BE+SC Smoke Test</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    .tab-btn { white-space: nowrap; border-bottom: 2px solid transparent; }
+    .tab-btn.active { border-bottom-color: #2563eb; color: #2563eb; font-weight: 600; }
+    pre { font-family: ui-monospace, SFMono-Regular, monospace; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 text-sm">
+
+<!-- ============================================================ -->
+<!-- Header                                                       -->
+<!-- ============================================================ -->
+<header class="bg-slate-900 text-white p-4 flex items-baseline gap-4">
+  <h1 class="text-xl font-bold">⚓ Helm BE+SC Smoke Test</h1>
+  <div id="status" class="text-xs text-slate-400">checking...</div>
+  <div class="ml-auto text-xs">
+    <a href="https://sepolia.mantlescan.xyz/" target="_blank" class="underline hover:text-blue-300">Explorer</a>
+    ·
+    <a href="/docs" target="_blank" class="underline hover:text-blue-300">API Docs</a>
+  </div>
+</header>
+
+<!-- ============================================================ -->
+<!-- Tab nav                                                      -->
+<!-- ============================================================ -->
+<nav class="flex border-b bg-white overflow-x-auto">
+  <button data-tab="market"     class="tab-btn px-4 py-3">🏪 Market</button>
+  <button data-tab="detail"     class="tab-btn px-4 py-3">🤖 Agent</button>
+  <button data-tab="mandate"    class="tab-btn px-4 py-3">✍️ Mandate</button>
+  <button data-tab="mint"       class="tab-btn px-4 py-3">💰 Mint Preview</button>
+  <button data-tab="admin"      class="tab-btn px-4 py-3">🛠️ Admin</button>
+  <button data-tab="conditions" class="tab-btn px-4 py-3">📊 Conditions</button>
+  <button data-tab="debug"      class="tab-btn px-4 py-3">🔍 Debug</button>
+</nav>
+
+<main class="p-6 max-w-7xl mx-auto">
+
+  <!-- ========================================================== -->
+  <!-- Tab: Marketplace                                           -->
+  <!-- ========================================================== -->
+  <section id="tab-market" class="tab-content">
+    <div class="flex items-center gap-2 mb-3">
+      <h2 class="text-lg font-bold">🏪 Marketplace</h2>
+      <button onclick="loadMarketplace()" class="text-xs bg-slate-200 px-2 py-1 rounded">↻ Reload</button>
+      <label class="text-xs ml-4">Sort:
+        <select id="market-sort" onchange="loadMarketplace()" class="border rounded px-1">
+          <option value="created_at">Newest</option>
+          <option value="sharpe">Sharpe</option>
+          <option value="total_return">Total Return</option>
+          <option value="reputation">Reputation</option>
+        </select>
+      </label>
+    </div>
+    <div id="market-list" class="grid grid-cols-1 md:grid-cols-2 gap-3"></div>
+  </section>
+
+  <!-- ========================================================== -->
+  <!-- Tab: Agent Detail                                          -->
+  <!-- ========================================================== -->
+  <section id="tab-detail" class="tab-content hidden">
+    <div class="flex items-center gap-2 mb-3">
+      <h2 class="text-lg font-bold">🤖 Agent Detail</h2>
+      <input id="detail-agent-id" type="number" placeholder="agent_id" class="border rounded px-2 py-1" value="9001">
+      <button onclick="loadDetail(document.getElementById('detail-agent-id').value)" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">Load</button>
+    </div>
+    <div id="detail-body" class="mb-4"></div>
+    <div id="detail-compare" class="mb-4"></div>
+    <div class="bg-white p-3 rounded">
+      <h3 class="font-bold text-sm mb-2">NAV vs Benchmark</h3>
+      <canvas id="nav-chart" height="80"></canvas>
+    </div>
+  </section>
+
+  <!-- ========================================================== -->
+  <!-- Tab: Mandate Author                                        -->
+  <!-- ========================================================== -->
+  <section id="tab-mandate" class="tab-content hidden">
+    <h2 class="text-lg font-bold mb-3">✍️ Mandate Author (LLM parse)</h2>
+    <textarea id="mandate-text" rows="6" class="w-full border rounded p-2"
+              placeholder="Describe your fund in natural language...">Aggressive AI growth — NVDA, MSFT, GOOGL heavy. Weekly rebalance. Stop loss at 20% drawdown.</textarea>
+    <button onclick="parseMandate()" class="mt-2 bg-blue-600 text-white px-3 py-1 rounded text-xs">Parse → JSON</button>
+    <div id="mandate-out" class="mt-3"></div>
+  </section>
+
+  <!-- ========================================================== -->
+  <!-- Tab: Mint Preview                                          -->
+  <!-- ========================================================== -->
+  <section id="tab-mint" class="tab-content hidden">
+    <h2 class="text-lg font-bold mb-3">💰 Mint Preview (read-only)</h2>
+    <div class="flex items-center gap-2 mb-3">
+      <input id="mint-agent-id" type="number" placeholder="agent_id" class="border rounded px-2 py-1" value="9001">
+      <input id="mint-amount" type="text" placeholder="USDC amount (6-dec)" class="border rounded px-2 py-1" value="100000000">
+      <button onclick="mintPreview()" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">Preview</button>
+    </div>
+    <div id="mint-out"></div>
+  </section>
+
+  <!-- ========================================================== -->
+  <!-- Tab: Admin                                                 -->
+  <!-- ========================================================== -->
+  <section id="tab-admin" class="tab-content hidden">
+    <h2 class="text-lg font-bold mb-3">🛠️ Admin Actions (BE executor → real chain tx)</h2>
+    <div class="bg-yellow-50 border border-yellow-200 p-2 rounded text-xs mb-4">
+      ⚠️ Each click sends a real on-chain tx via the executor wallet. Gas is spent. Tx hashes appear below + in the Debug tab's "recent" feed with explorer links.
+    </div>
+
+    <h3 class="font-bold text-sm mt-2 mb-1">Time / USDC</h3>
+    <div class="flex flex-wrap gap-2 mb-3">
+      <button onclick="adminCall('/admin/time/advance', 'time +1d', {seconds:86400})" class="bg-orange-600 text-white px-3 py-2 rounded text-xs">+1 day</button>
+      <button onclick="adminCall('/admin/time/advance', 'time +7d', {seconds:86400*7})" class="bg-orange-600 text-white px-3 py-2 rounded text-xs">+7 days</button>
+      <button onclick="adminCall('/admin/time/advance', 'time +30d', {seconds:86400*30})" class="bg-orange-600 text-white px-3 py-2 rounded text-xs">+30 days</button>
+      <input id="usdc-to" placeholder="recipient 0x..." class="border rounded px-2 py-1 text-xs flex-grow min-w-[20rem]">
+      <button onclick="adminCall('/admin/mint-usdc', 'mint USDC', {to: document.getElementById('usdc-to').value, amount_usdc: '10000000000'})" class="bg-orange-600 text-white px-3 py-2 rounded text-xs">Mint 10k USDC</button>
+    </div>
+
+    <h3 class="font-bold text-sm mt-4 mb-1">Per-agent actions</h3>
+    <div class="flex flex-wrap gap-2 mb-3 items-center">
+      <input id="admin-agent-id" type="number" placeholder="agent_id" class="border rounded px-2 py-1 text-xs w-32" value="9001">
+      <button onclick="adminAgent('rebalance')"    class="bg-purple-600 text-white px-3 py-2 rounded text-xs">Rebalance</button>
+      <button onclick="adminAgent('harvest')"      class="bg-purple-600 text-white px-3 py-2 rounded text-xs">Harvest</button>
+      <button onclick="adminAgent('distribute')"   class="bg-purple-600 text-white px-3 py-2 rounded text-xs">Distribute</button>
+      <button onclick="adminAgent('nft-metadata')" class="bg-purple-600 text-white px-3 py-2 rounded text-xs">Update NFT</button>
+      <button onclick="adminQualify('GET')"        class="bg-emerald-600 text-white px-3 py-2 rounded text-xs">Qualify (check)</button>
+      <button onclick="adminQualify('POST')"       class="bg-emerald-700 text-white px-3 py-2 rounded text-xs">Qualify + Advance</button>
+    </div>
+
+    <div id="admin-output" class="mt-4"></div>
+  </section>
+
+  <!-- ========================================================== -->
+  <!-- Tab: Conditions                                            -->
+  <!-- ========================================================== -->
+  <section id="tab-conditions" class="tab-content hidden">
+    <h2 class="text-lg font-bold mb-3">📊 Mandate Conditions (Bybit-backed DSL)</h2>
+    <div class="flex items-center gap-2 mb-3">
+      <input id="cond-agent-id" type="number" placeholder="agent_id" class="border rounded px-2 py-1" value="9001">
+      <button onclick="loadConditions()" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">Evaluate</button>
+    </div>
+    <div id="cond-out"></div>
+  </section>
+
+  <!-- ========================================================== -->
+  <!-- Tab: Debug                                                 -->
+  <!-- ========================================================== -->
+  <section id="tab-debug" class="tab-content hidden">
+    <h2 class="text-lg font-bold mb-3">🔍 Debug — Chain Inspector</h2>
+
+    <div class="bg-white p-3 rounded mb-4">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="font-bold text-sm">Indexer state</h3>
+        <button onclick="refreshIndexerState()" class="text-xs bg-slate-200 px-2 py-1 rounded">↻</button>
+      </div>
+      <div id="indexer-state" class="text-sm">loading...</div>
+    </div>
+
+    <div class="bg-white p-3 rounded mb-4">
+      <div class="flex items-center gap-2 mb-2">
+        <h3 class="font-bold text-sm">BE ↔ SC compare</h3>
+        <input id="debug-agent-id" type="number" placeholder="agent_id" class="border rounded px-2 py-1 text-xs" value="9001">
+        <button onclick="compareAgent()" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">Compare</button>
+      </div>
+      <div id="compare-out" class="text-sm"></div>
+    </div>
+
+    <div class="bg-white p-3 rounded mb-4">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="font-bold text-sm">Synthetic asset prices (Pyth via on-chain adapter)</h3>
+        <button onclick="loadSynthetics()" class="text-xs bg-slate-200 px-2 py-1 rounded">↻</button>
+      </div>
+      <div id="synth-prices" class="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">click ↻ to load</div>
+    </div>
+
+    <div class="bg-white p-3 rounded mb-4">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="font-bold text-sm">Yield adapters (mETH + USDY)</h3>
+        <button onclick="loadAdapters()" class="text-xs bg-slate-200 px-2 py-1 rounded">↻</button>
+      </div>
+      <div id="adapters-info" class="text-xs">click ↻ to load</div>
+    </div>
+
+    <div class="bg-white p-3 rounded mb-4">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="font-bold text-sm">PlatformTreasury (fees)</h3>
+        <button onclick="loadTreasury()" class="text-xs bg-slate-200 px-2 py-1 rounded">↻</button>
+      </div>
+      <div id="treasury-info" class="text-xs">click ↻ to load</div>
+    </div>
+
+    <div class="bg-white p-3 rounded mb-4">
+      <div class="flex items-center gap-2 mb-2">
+        <h3 class="font-bold text-sm">Per-agent SC state</h3>
+        <input id="extra-agent-id" type="number" placeholder="agent_id" class="border rounded px-2 py-1 text-xs w-32">
+        <button onclick="loadFounderVault()" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">FounderVault</button>
+        <button onclick="loadRedemptionQueue()" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">RedemptionQueue</button>
+      </div>
+      <div id="per-agent-sc" class="text-xs">no query yet</div>
+    </div>
+
+    <div class="bg-white p-3 rounded">
+      <h3 class="font-bold text-sm mb-2">Recent tx (this session)</h3>
+      <div id="recent-tx" class="text-xs text-slate-500">none yet — admin actions appear here</div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+// ============================================================
+// Globals + small helpers
+// ============================================================
+const API = window.location.origin;
+const EXPLORER = 'https://sepolia.mantlescan.xyz';
+window.recentTxs = [];
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const fmt = (n, d=2) => (typeof n === 'number') ? n.toFixed(d) : 'n/a';
+const link = (h, label) => `<a href="${EXPLORER}/tx/${h}" target="_blank" class="text-blue-600 underline">${esc(label || h)}</a>`;
+
+// ============================================================
+// Tab switcher
+// ============================================================
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+    btn.classList.add('active');
+    $('tab-' + btn.dataset.tab).classList.remove('hidden');
+    // Lazy loads
+    if (btn.dataset.tab === 'market') loadMarketplace();
+    if (btn.dataset.tab === 'debug')  refreshIndexerState();
+  };
+});
+
+// ============================================================
+// Connection status
+// ============================================================
+async function checkStatus() {
+  try {
+    const d = await (await fetch(`${API}/system/info`)).json();
+    $('status').textContent = `✓ chainId ${d.chainId} · ${Object.keys(d.contracts || {}).length} contracts`;
+  } catch {
+    $('status').textContent = '❌ BE unreachable';
+  }
+}
+checkStatus();
+
+// ============================================================
+// Marketplace
+// ============================================================
+async function loadMarketplace() {
+  const sort = $('market-sort').value;
+  const d = await (await fetch(`${API}/agents?sort=${sort}&order=desc`)).json();
+  $('market-list').innerHTML = (d.items || []).map(a => {
+    const p = a.performance || {};
+    const premiumPct = a.reputationPremiumBps != null ? (a.reputationPremiumBps / 100).toFixed(2) : 'n/a';
+    const premClass = (a.reputationPremiumBps ?? 0) > 0 ? 'text-green-700' : 'text-red-700';
+    return `
+      <div class="bg-white p-4 rounded shadow-sm cursor-pointer hover:shadow-md transition" onclick="loadDetail(${a.agentId})">
+        <div class="flex justify-between items-baseline">
+          <div>
+            <div class="font-bold text-base">${esc(a.name)} <span class="text-xs text-slate-500">(${esc(a.ticker)})</span></div>
+            <div class="text-xs text-slate-500">#${a.agentId} · ${esc(a.phase)} · rep ${a.reputation}</div>
+          </div>
+          <span class="${premClass} text-sm font-bold">${premiumPct >= 0 ? '+' : ''}${premiumPct}%</span>
+        </div>
+        <div class="grid grid-cols-3 gap-2 mt-3 text-xs">
+          <div><div class="text-slate-500">NAV/share</div><div>${a.navPerShareUsdc}</div></div>
+          <div><div class="text-slate-500">Sharpe</div><div>${fmt(p.sharpeRatio)}</div></div>
+          <div><div class="text-slate-500">Return</div><div>${p.totalReturn != null ? (p.totalReturn*100).toFixed(2) + '%' : 'n/a'}</div></div>
+        </div>
+        <div class="text-xs mt-2 text-slate-600 truncate">${esc(a.strategy)}</div>
+      </div>`;
+  }).join('') || '<div class="text-slate-500">no agents</div>';
+}
+
+// ============================================================
+// Agent Detail (BE + live SC compare)
+// ============================================================
+async function loadDetail(agentId) {
+  // Switch tab
+  document.querySelector('[data-tab="detail"]').click();
+  $('detail-agent-id').value = agentId;
+
+  // Parallel fetches; per-call .catch so partial failures still render
+  const [agent, bench, cmp] = await Promise.all([
+    fetch(`${API}/agents/${agentId}`).then(r => r.ok ? r.json() : null).catch(() => null),
+    fetch(`${API}/agents/${agentId}/benchmark`).then(r => r.ok ? r.json() : null).catch(() => null),
+    fetch(`${API}/admin/debug/agents/${agentId}/compare`).then(r => r.ok ? r.json() : null).catch(() => null),
+  ]);
+
+  if (!agent) { $('detail-body').innerHTML = '<div class="text-red-600">agent not found</div>'; return; }
+
+  const p = agent.performance || {};
+  $('detail-body').innerHTML = `
+    <h2 class="font-bold text-lg mb-2">${esc(agent.name)} (${esc(agent.ticker)}) <span class="text-xs text-slate-500">#${agent.agentId}</span></h2>
+    <div class="grid grid-cols-4 gap-3">
+      <div class="bg-white p-3 rounded"><div class="text-xs text-slate-500">Phase</div><div class="font-bold">${esc(agent.phase)}</div></div>
+      <div class="bg-white p-3 rounded"><div class="text-xs text-slate-500">Sharpe</div><div class="font-bold">${fmt(p.sharpeRatio)}</div></div>
+      <div class="bg-white p-3 rounded"><div class="text-xs text-slate-500">Total Return</div><div class="font-bold">${p.totalReturn != null ? (p.totalReturn*100).toFixed(2) + '%' : 'n/a'}</div></div>
+      <div class="bg-white p-3 rounded"><div class="text-xs text-slate-500">Reputation Premium</div><div class="font-bold">${agent.reputationPremiumBps != null ? (agent.reputationPremiumBps/100).toFixed(2) + '%' : 'n/a'}</div></div>
+    </div>
+    <details class="mt-4 bg-white p-3 rounded">
+      <summary class="font-bold cursor-pointer text-sm">Full agent JSON</summary>
+      <pre class="text-xs mt-2 overflow-auto max-h-96">${esc(JSON.stringify(agent, null, 2))}</pre>
+    </details>
+  `;
+
+  // BE vs SC compare panel
+  if (cmp && cmp.be) {
+    const check = b => b ? '<span class="text-green-700">✓</span>' : '<span class="text-red-700">✗</span>';
+    $('detail-compare').innerHTML = `
+      <h3 class="font-bold text-sm mt-4 mb-2">BE ↔ SC consistency</h3>
+      <table class="w-full text-xs bg-white rounded overflow-hidden">
+        <thead class="bg-slate-100">
+          <tr><th class="p-2 text-left">Field</th><th class="text-left">BE</th><th class="text-left">SC (live)</th><th>Match</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="p-2">Phase</td><td>${esc(cmp.be.phase)}</td><td class="text-slate-700">${esc(cmp.sc.phase)}</td><td class="text-center">${check(cmp.consistent.phase)}</td></tr>
+          <tr><td class="p-2">Reputation</td><td>${esc(cmp.be.reputation)}</td><td>${esc(cmp.sc.reputation)}</td><td class="text-center">${check(cmp.consistent.reputation)}</td></tr>
+          <tr><td class="p-2">Total Assets (chain)</td><td class="text-slate-400">—</td><td>${esc(cmp.sc.totalAssets)}</td><td></td></tr>
+          <tr><td class="p-2">Mandate URI / tokenURI</td><td class="truncate max-w-xs">${esc(cmp.be.mandateUri)}</td><td class="truncate max-w-xs">${esc(cmp.sc.tokenURI)}</td><td class="text-center">${check(cmp.consistent.tokenURI)}</td></tr>
+        </tbody>
+      </table>
+    `;
+  } else {
+    $('detail-compare').innerHTML = '<div class="text-xs text-slate-500 mt-4">SC compare unavailable (seed agent or chain unreachable)</div>';
+  }
+
+  // NAV vs benchmark chart
+  const ctx = $('nav-chart').getContext('2d');
+  if (window.navChartInst) window.navChartInst.destroy();
+  if (bench && bench.series && bench.series.length) {
+    window.navChartInst = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: bench.series.map(p => new Date(p.timestamp * 1000).toLocaleDateString()),
+        datasets: [
+          { label: 'Agent',          data: bench.series.map(p => p.agent),       borderColor: '#2563eb', tension: 0.3, borderWidth: 2 },
+          { label: 'sSPY 10%/yr',    data: bench.series.map(p => p.sspy),        borderColor: '#dc2626', tension: 0.3, borderWidth: 1, borderDash: [4,4] },
+          { label: '60/40 7.6%/yr',  data: bench.series.map(p => p.sixtyForty),  borderColor: '#16a34a', tension: 0.3, borderWidth: 1, borderDash: [4,4] },
+        ],
+      },
+      options: { animation: false, scales: { y: { beginAtZero: false } } },
+    });
+  }
+}
+
+// ============================================================
+// Mandate parse
+// ============================================================
+async function parseMandate() {
+  $('mandate-out').innerHTML = '<div class="text-slate-500">parsing…</div>';
+  try {
+    const r = await fetch(`${API}/mandate/parse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ naturalLanguageMandate: $('mandate-text').value }),
+    });
+    const d = await r.json();
+    $('mandate-out').innerHTML = `
+      <div class="text-xs text-slate-500 mb-1">HTTP ${r.status}</div>
+      <pre class="text-xs bg-white p-3 rounded overflow-auto max-h-[28rem]">${esc(JSON.stringify(d, null, 2))}</pre>
+    `;
+  } catch (e) {
+    $('mandate-out').innerHTML = `<div class="text-red-600 text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+// ============================================================
+// Mint preview
+// ============================================================
+async function mintPreview() {
+  const aid = $('mint-agent-id').value;
+  const amt = $('mint-amount').value;
+  $('mint-out').innerHTML = '<div class="text-slate-500">previewing…</div>';
+  try {
+    const r = await fetch(`${API}/agents/${aid}/mint-preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amountUsdc: amt }),
+    });
+    const d = await r.json();
+    $('mint-out').innerHTML = `
+      <div class="text-xs text-slate-500 mb-1">HTTP ${r.status}</div>
+      <pre class="text-xs bg-white p-3 rounded overflow-auto max-h-[28rem]">${esc(JSON.stringify(d, null, 2))}</pre>
+    `;
+  } catch (e) {
+    $('mint-out').innerHTML = `<div class="text-red-600 text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+// ============================================================
+// Conditions (Bybit DSL)
+// ============================================================
+async function loadConditions() {
+  const aid = $('cond-agent-id').value;
+  const d = await (await fetch(`${API}/agents/${aid}/conditions`)).json();
+  $('cond-out').innerHTML = `
+    <div class="bg-white p-3 rounded mb-2">
+      <div class="text-xs text-slate-500">Any triggered?</div>
+      <div class="font-bold ${d.anyTriggered ? 'text-red-700' : 'text-green-700'}">${d.anyTriggered ? '🚨 YES' : 'no'}</div>
+    </div>
+    <table class="w-full text-xs bg-white rounded overflow-hidden">
+      <thead class="bg-slate-100">
+        <tr><th class="p-2 text-left">Condition</th><th>Parsed?</th><th>Current</th><th>Threshold</th><th>Triggered</th><th>Note</th></tr>
+      </thead>
+      <tbody>
+        ${(d.conditions || []).map(c => `
+          <tr>
+            <td class="p-2 font-mono">${esc(c.condition)}</td>
+            <td class="text-center">${c.parsed ? '✓' : '—'}</td>
+            <td class="text-right">${c.currentValue != null ? c.currentValue : '—'}</td>
+            <td class="text-right">${c.threshold != null ? c.threshold : '—'}</td>
+            <td class="text-center ${c.triggered ? 'text-red-700 font-bold' : ''}">${c.triggered ? '🚨' : ''}</td>
+            <td class="text-slate-500">${esc(c.note || '')}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+// ============================================================
+// Admin actions
+// ============================================================
+async function adminCall(path, label, body = null) {
+  const opts = body
+    ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+    : { method: 'POST' };
+  $('admin-output').innerHTML = `<div class="text-slate-500 text-xs">→ ${esc(path)} …</div>`;
+  try {
+    const r = await fetch(`${API}${path}`, opts);
+    const d = await r.json();
+    if (d.txHash) {
+      window.recentTxs.unshift({ label, txHash: d.txHash, ts: Date.now() });
+      window.recentTxs = window.recentTxs.slice(0, 30);
+      renderRecentTxs();
+    }
+    $('admin-output').innerHTML = `
+      <div class="text-xs text-slate-500">${esc(path)} → HTTP ${r.status}</div>
+      ${d.txHash ? `<div class="mt-1">${link(d.txHash, d.txHash)}</div>` : ''}
+      <pre class="text-xs mt-2 bg-white p-2 rounded overflow-auto max-h-96">${esc(JSON.stringify(d, null, 2))}</pre>
+    `;
+  } catch (e) {
+    $('admin-output').innerHTML = `<div class="text-red-600 text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+function adminAgent(action) {
+  const aid = $('admin-agent-id').value;
+  if (!aid) { alert('agent_id required'); return; }
+  adminCall(`/admin/agents/${aid}/${action}`, `${action} #${aid}`);
+}
+
+function adminQualify(method) {
+  const aid = $('admin-agent-id').value;
+  if (!aid) { alert('agent_id required'); return; }
+  $('admin-output').innerHTML = `<div class="text-slate-500 text-xs">→ ${method} /admin/agents/${aid}/qualify …</div>`;
+  fetch(`${API}/admin/agents/${aid}/qualify`, { method })
+    .then(r => r.json().then(d => ({ status: r.status, d })))
+    .then(({ status, d }) => {
+      if (d.txHash) {
+        window.recentTxs.unshift({ label: `qualify ${method} #${aid}`, txHash: d.txHash, ts: Date.now() });
+        renderRecentTxs();
+      }
+      $('admin-output').innerHTML = `
+        <div class="text-xs text-slate-500">HTTP ${status}</div>
+        ${d.txHash ? `<div class="mt-1">${link(d.txHash, d.txHash)}</div>` : ''}
+        <pre class="text-xs mt-2 bg-white p-2 rounded overflow-auto max-h-96">${esc(JSON.stringify(d, null, 2))}</pre>
+      `;
+    });
+}
+
+// ============================================================
+// Debug
+// ============================================================
+async function refreshIndexerState() {
+  try {
+    const d = await (await fetch(`${API}/admin/debug/indexer-state`)).json();
+    const gapColor = d.gap < 100 ? 'text-green-700' : d.gap < 1000 ? 'text-yellow-700' : 'text-red-700';
+    $('indexer-state').innerHTML = `
+      <div>Chain head: <b>${(d.chainHead || 0).toLocaleString()}</b></div>
+      <div>Last synced: <b>${(d.lastSyncedBlock || 0).toLocaleString()}</b></div>
+      <div class="${gapColor}">Gap: <b>${d.gap}</b> blocks</div>
+      <div class="text-xs text-slate-500 mt-1">updated at ${d.updatedAt ? new Date(d.updatedAt * 1000).toLocaleString() : '—'}</div>
+    `;
+  } catch (e) {
+    $('indexer-state').innerHTML = `<div class="text-red-600 text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function compareAgent() {
+  const aid = $('debug-agent-id').value;
+  if (!aid) return;
+  try {
+    const r = await fetch(`${API}/admin/debug/agents/${aid}/compare`);
+    const d = await r.json();
+    const check = b => b ? '<span class="text-green-700">✓</span>' : '<span class="text-red-700">✗</span>';
+    if (!d.be) {
+      $('compare-out').innerHTML = `<pre class="text-xs">${esc(JSON.stringify(d, null, 2))}</pre>`;
+      return;
+    }
+    $('compare-out').innerHTML = `
+      <table class="w-full text-xs">
+        <thead class="bg-slate-100">
+          <tr><th class="p-2 text-left">Field</th><th class="text-left">BE</th><th class="text-left">SC (live)</th><th>Match</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="p-2">Phase</td><td>${esc(d.be.phase)}</td><td>${esc(d.sc.phase)}</td><td class="text-center">${check(d.consistent.phase)}</td></tr>
+          <tr><td class="p-2">Reputation</td><td>${esc(d.be.reputation)}</td><td>${esc(d.sc.reputation)}</td><td class="text-center">${check(d.consistent.reputation)}</td></tr>
+          <tr><td class="p-2">Total Assets</td><td class="text-slate-400">—</td><td>${esc(d.sc.totalAssets)}</td><td></td></tr>
+          <tr><td class="p-2">Mandate / tokenURI</td><td class="truncate max-w-xs">${esc(d.be.mandateUri)}</td><td class="truncate max-w-xs">${esc(d.sc.tokenURI)}</td><td class="text-center">${check(d.consistent.tokenURI)}</td></tr>
+        </tbody>
+      </table>
+    `;
+  } catch (e) {
+    $('compare-out').innerHTML = `<div class="text-red-600 text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadSynthetics() {
+  $('synth-prices').innerHTML = '<div class="text-slate-500">loading…</div>';
+  try {
+    const d = await (await fetch(`${API}/admin/debug/synthetic-prices`)).json();
+    $('synth-prices').innerHTML = Object.entries(d).map(([sym, info]) => `
+      <div class="bg-slate-50 p-2 rounded">
+        <div class="font-bold">${esc(sym)}</div>
+        ${info.priceUsdc
+          ? `<div class="text-green-700">$${(Number(info.priceUsdc) / 1e6).toFixed(2)}</div>`
+          : `<div class="text-red-600 truncate" title="${esc(info.error)}">${esc(info.error)}</div>`}
+        <div class="text-slate-500 truncate text-[10px]">${esc(info.address)}</div>
+      </div>
+    `).join('');
+  } catch (e) {
+    $('synth-prices').innerHTML = `<div class="text-red-600">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadAdapters() {
+  $('adapters-info').innerHTML = '<div class="text-slate-500">loading…</div>';
+  try {
+    const d = await (await fetch(`${API}/admin/debug/adapters`)).json();
+    $('adapters-info').innerHTML = `<pre class="bg-slate-50 p-2 rounded overflow-auto max-h-72">${esc(JSON.stringify(d, null, 2))}</pre>`;
+  } catch (e) {
+    $('adapters-info').innerHTML = `<div class="text-red-600">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadTreasury() {
+  $('treasury-info').innerHTML = '<div class="text-slate-500">loading…</div>';
+  try {
+    const d = await (await fetch(`${API}/admin/debug/treasury`)).json();
+    if (d.error) {
+      $('treasury-info').innerHTML = `<div class="text-red-600">${esc(d.error)}</div>`;
+      return;
+    }
+    $('treasury-info').innerHTML = `
+      <div class="grid grid-cols-4 gap-2">
+        <div class="bg-slate-50 p-2 rounded"><div class="text-slate-500">Mint fee</div><div class="font-bold">${(d.mintBps/100).toFixed(2)}%</div></div>
+        <div class="bg-slate-50 p-2 rounded"><div class="text-slate-500">Redeem fee</div><div class="font-bold">${(d.redeemBps/100).toFixed(2)}%</div></div>
+        <div class="bg-slate-50 p-2 rounded"><div class="text-slate-500">Rebalance fee</div><div class="font-bold">${(d.rebalanceBps/100).toFixed(2)}%</div></div>
+        <div class="bg-slate-50 p-2 rounded"><div class="text-slate-500">Total collected</div><div class="font-bold">${d.totalFeesCollected}</div></div>
+      </div>
+      <div class="text-slate-500 mt-1">${esc(d.address)}</div>
+    `;
+  } catch (e) {
+    $('treasury-info').innerHTML = `<div class="text-red-600">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadFounderVault() {
+  const aid = $('extra-agent-id').value;
+  if (!aid) { alert('agent_id required'); return; }
+  $('per-agent-sc').innerHTML = '<div class="text-slate-500">loading…</div>';
+  try {
+    const r = await fetch(`${API}/admin/debug/agents/${aid}/founder-vault`);
+    const d = await r.json();
+    $('per-agent-sc').innerHTML = `<pre class="bg-slate-50 p-2 rounded overflow-auto max-h-72">${esc(JSON.stringify(d, null, 2))}</pre>`;
+  } catch (e) {
+    $('per-agent-sc').innerHTML = `<div class="text-red-600">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadRedemptionQueue() {
+  const aid = $('extra-agent-id').value;
+  if (!aid) { alert('agent_id required'); return; }
+  $('per-agent-sc').innerHTML = '<div class="text-slate-500">loading…</div>';
+  try {
+    const r = await fetch(`${API}/admin/debug/agents/${aid}/redemption-queue`);
+    const d = await r.json();
+    $('per-agent-sc').innerHTML = `<pre class="bg-slate-50 p-2 rounded overflow-auto max-h-72">${esc(JSON.stringify(d, null, 2))}</pre>`;
+  } catch (e) {
+    $('per-agent-sc').innerHTML = `<div class="text-red-600">${esc(e.message)}</div>`;
+  }
+}
+
+function renderRecentTxs() {
+  if (!window.recentTxs.length) {
+    $('recent-tx').innerHTML = '<div class="text-xs text-slate-500">none yet — admin actions appear here</div>';
+    return;
+  }
+  $('recent-tx').innerHTML = window.recentTxs.map(t => `
+    <div class="text-xs py-1 border-b last:border-0 flex gap-3">
+      <span class="text-slate-500">${new Date(t.ts).toLocaleTimeString()}</span>
+      <b class="min-w-[8rem]">${esc(t.label)}</b>
+      ${link(t.txHash, t.txHash.slice(0,10) + '…' + t.txHash.slice(-6))}
+    </div>
+  `).join('');
+}
+
+// ============================================================
+// Initial tab
+// ============================================================
+document.querySelector('.tab-btn').click();
+</script>
+
+</body>
+</html>
