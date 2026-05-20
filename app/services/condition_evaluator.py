@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Agent
 from app.repos import analytics
-from app.services.bybit_client import get_market_metrics
+from app.services.coingecko_client import get_market_metrics
 
 CONDITION_RE = re.compile(
     r"^\s*(\w+)\s*(>=|<=|==|>|<)\s*(-?\d+\.?\d*)\s*$"

@@ -1,5 +1,11 @@
 """Bybit V5 public market data client (no auth required).
 
+DEPRECATED: Bybit geo-blocks Railway's US East egress IPs, so production
+deploys saw every call fail. Live callers were switched to
+``app.services.coingecko_client`` (see Task PP). This module is kept around
+only because it has no other importers; remove once a cleanup pass confirms
+nothing else loads it.
+
 In-process TTL cache to keep us under the public rate limits during demo
 traffic. All exceptions are caught at the metric-aggregator boundary so a
 flaky upstream surfaces as ``None`` values rather than a 500.
