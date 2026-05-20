@@ -1,6 +1,15 @@
 from app.chain.abi_loader import load_abi
-from app.chain.client import agent_nft, get_w3, registry
+from app.chain.client import (
+    agent_nft,
+    dividend_distributor,
+    get_w3,
+    redemption_queue,
+    registry,
+)
+from app.indexer.handlers import distributor as distributor_h
+from app.indexer.handlers import founder as founder_h
 from app.indexer.handlers import nft as nft_h
+from app.indexer.handlers import redemption as redemption_h
 from app.indexer.handlers import registry as registry_h
 from app.indexer.handlers import vault as vault_h
 
@@ -24,6 +33,24 @@ NFT_EVENTS = {
     "TokenURISet":       nft_h.handle_token_uri_set,
 }
 
+DISTRIBUTOR_EVENTS = {
+    "Distributed": distributor_h.handle_distributed,
+    "Claimed":     distributor_h.handle_claimed,
+}
+
+REDEMPTION_EVENTS = {
+    "RedeemRequested": redemption_h.handle_redeem_requested,
+    "RedeemClaimed":   redemption_h.handle_redeem_claimed,
+    "RedeemCancelled": redemption_h.handle_redeem_cancelled,
+}
+
+FOUNDER_EVENTS = {
+    "CarryReceived":          founder_h.handle_carry_received,
+    "CarryClaimed":           founder_h.handle_carry_claimed,
+    "SharesWithdrawn":        founder_h.handle_shares_withdrawn,
+    "SubordinationTriggered": founder_h.handle_subordination_triggered,
+}
+
 
 def process_range(db, start_block: int, end_block: int):
     w3 = get_w3()
@@ -32,8 +59,12 @@ def process_range(db, start_block: int, end_block: int):
     _process_contract_events(db, registry(), REGISTRY_EVENTS, start_block, end_block)
     # 2) NFT events (global)
     _process_contract_events(db, agent_nft(), NFT_EVENTS, start_block, end_block)
-    # 3) Vault events — only for agents with a real on-chain vault that is
-    #    still active. Skip:
+    # 3) DividendDistributor (global)
+    _process_contract_events(db, dividend_distributor(), DISTRIBUTOR_EVENTS, start_block, end_block)
+    # 4) RedemptionQueue (global)
+    _process_contract_events(db, redemption_queue(), REDEMPTION_EVENTS, start_block, end_block)
+    # 5) Per-agent vault + founder vault events — only for on-chain agents
+    #    that are still active. Skip:
     #      * seed agents (agent_id >= 9000) — stub vault addresses, never emit.
     #      * Settled agents — fully wound down, no rebalance/yield activity.
     from app.db.models import Agent
@@ -49,6 +80,12 @@ def process_range(db, start_block: int, end_block: int):
             abi=load_abi("AgentVault"),
         )
         _process_contract_events(db, c, VAULT_EVENTS, start_block, end_block)
+
+        c_fv = w3.eth.contract(
+            address=w3.to_checksum_address(a.founder_vault_address),
+            abi=load_abi("FounderVault"),
+        )
+        _process_contract_events(db, c_fv, FOUNDER_EVENTS, start_block, end_block)
 
 
 def _process_contract_events(db, contract, event_map: dict, start: int, end: int):
