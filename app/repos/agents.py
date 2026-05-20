@@ -224,6 +224,35 @@ def compute_holder_count(db: Session, agent_id: int) -> int:
     )
 
 
+def count_decisions_by_type(db: Session, agent_id: int, decision_type: str) -> int:
+    return int(
+        db.execute(
+            select(func.count())
+            .select_from(Decision)
+            .where(Decision.agent_id == agent_id, Decision.type == decision_type)
+        ).scalar_one()
+    )
+
+
+def count_active_holders(db: Session, agent_id: int) -> int:
+    return int(
+        db.execute(
+            select(func.count())
+            .select_from(Holder)
+            .where(Holder.agent_id == agent_id, Holder.balance != "0")
+        ).scalar_one()
+    )
+
+
+def sum_harvested_usdc(db: Session, agent_id: int) -> int:
+    rows = db.execute(
+        select(Decision).where(
+            Decision.agent_id == agent_id, Decision.type == "Harvest"
+        )
+    ).scalars()
+    return sum(int(r.harvested_usdc or 0) for r in rows)
+
+
 def get_nav_history(
     db: Session, agent_id: int, period: NavPeriod
 ) -> list[NavPoint]:
@@ -275,6 +304,9 @@ __all__ = [
     "get_latest_nav",
     "compute_apy_bps",
     "compute_holder_count",
+    "count_decisions_by_type",
+    "count_active_holders",
+    "sum_harvested_usdc",
     "get_nav_history",
     "get_pyth_feeds_for_agent",
 ]

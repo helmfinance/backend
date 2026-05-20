@@ -658,6 +658,7 @@ class AdminNftMetadataResponse(HelmModel):
     agent_id: int
     tx_hash: str
     uri: str
+    attribute_count: int | None = None
 
 
 __all__ = [

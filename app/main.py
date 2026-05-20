@@ -855,6 +855,7 @@ def admin_nft_metadata(agent_id: int, response: Response) -> AdminNftMetadataRes
             agent_id=agent_id,
             tx_hash=result["tx_hash"],
             uri=result["uri"],
+            attribute_count=result.get("attribute_count"),
         )
     except Exception as e:
         raise HTTPException(503, detail=ApiError(
