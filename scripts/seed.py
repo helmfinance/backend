@@ -172,7 +172,7 @@ def _seed_agent1(db, now: int) -> None:
         mandate=mandate,
         mandate_uri=f"ipfs://{mandate_hash[2:]}",
         mandate_hash=mandate_hash,
-        reputation=72,
+        reputation=10000,
         thumbnail_url="https://placehold.co/256x256?text=TEC",
         created_at=incubation_start,
     )
@@ -401,7 +401,7 @@ def _seed_agent2(db, now: int) -> None:
         mandate=mandate,
         mandate_uri=f"ipfs://{mandate_hash[2:]}",
         mandate_hash=mandate_hash,
-        reputation=20,
+        reputation=8500,
         thumbnail_url=None,
         created_at=incubation_start,
     )
@@ -508,10 +508,20 @@ def seed(append: bool = False) -> None:
         _seed_agent1(db, now)
         _seed_agent2(db, now)
 
+        # Anchor the indexer near the current chain head so the first cycle is
+        # a no-op instead of a 36M-block catch-up that hangs the demo.
+        try:
+            from app.chain.client import get_w3
+            head = get_w3().eth.block_number
+            start_block = max(0, head - 100)
+            print(f"[seed] indexer state initialized at block {start_block} (chain head {head})")
+        except Exception as e:
+            print(f"[seed] WARN: chain head fetch failed: {e}. Falling back to 0.")
+            start_block = 0
         db.merge(
             IndexerState(
                 chain_id=5003,
-                last_synced_block=1_750_000,
+                last_synced_block=start_block,
                 updated_at=now,
             )
         )
