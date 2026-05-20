@@ -48,6 +48,7 @@ from app.schemas import (
     AdminNftMetadataResponse, AdminRebalanceResponse,
     AgentDetail, AgentPerformance, AgentPhase, AgentSummary, ApiError, ApiErrorCode, AssetClass,
     BenchmarkPoint, BenchmarkResponse, BenchmarkSummary,
+    ConditionCheckResponse, ConditionResult,
     QualificationCriterion, QualificationResponse,
     ContractAddresses, Decision, DecisionType, FeeRates, HealthResponse,
     LockupTier, MandateParseRequest, MandateParseResponse, MandateSchema,
@@ -60,6 +61,7 @@ from app.schemas import (
 )
 from app.chain.client import time_provider, usdc
 from app.chain.executor_wallet import send_tx
+from app.services import condition_evaluator
 from app.services import distribute, harvest, nft_metadata, qualification, rebalance
 from web3 import Web3
 from app.utils.addresses import addr_or_zero
@@ -261,6 +263,25 @@ def get_benchmark(agent_id: int, db: Session = Depends(get_db)):
         sample_count=result["sample_count"],
         series=[BenchmarkPoint(**p) for p in result["series"]],
         summary=BenchmarkSummary(**result["summary"]) if result["summary"] else None,
+    )
+
+
+@app.get(
+    "/agents/{agent_id}/conditions",
+    response_model=ConditionCheckResponse,
+    responses={404: {"model": ApiError}},
+    dependencies=[Depends(cache_for(60))],
+    summary="Evaluate mandate emergencyExitConditions against live Bybit market data",
+    tags=["agents"],
+)
+def get_conditions(agent_id: int, db: Session = Depends(get_db)):
+    if agent_repo.get_agent(db, agent_id) is None:
+        raise _api_error(404, ApiErrorCode.NotFound, f"Agent {agent_id} not found")
+    results = condition_evaluator.evaluate_conditions(db, agent_id)
+    return ConditionCheckResponse(
+        agent_id=agent_id,
+        any_triggered=any(r["triggered"] for r in results),
+        conditions=[ConditionResult(**r) for r in results],
     )
 
 

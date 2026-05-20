@@ -64,6 +64,22 @@ MARKETPLACE FLAVOR (you MUST populate these two fields):
   - "yield-focused": prioritizes USDC dividend over capital gain
   If none fit, invent a similar 1-2 word hyphenated descriptor.
 
+EMERGENCY EXIT CONDITIONS (machine-evaluable DSL preferred):
+
+For emergencyExitConditions, extract entries in this DSL whenever possible:
+  <METRIC> <OP> <VALUE>
+Supported metrics: BTC_PRICE, ETH_PRICE, BTC_FUNDING_RATE,
+BTC_24H_CHANGE, ETH_24H_CHANGE, DRAWDOWN
+Operators: >, <, >=, <=, ==
+
+Examples:
+- "Panic exit if BTC drops 10% in a day" → "BTC_24H_CHANGE < -0.10"
+- "Hedge when funding rate spikes"        → "BTC_FUNDING_RATE > 0.001"
+- "Stop loss at 25% drawdown"             → "DRAWDOWN > 0.25"
+
+If a condition cannot fit the DSL, keep it as free text — it will be logged
+but not auto-evaluated.
+
 Use the set_mandate tool with the parsed mandate. Always include all required fields."""
 
 

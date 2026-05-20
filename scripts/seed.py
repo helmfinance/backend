@@ -101,6 +101,8 @@ def _agent1_mandate() -> dict:
         "emergency_exit_conditions": [
             "drawdown > 25% over 7d",
             "Pyth feed stale > 60s",
+            "BTC_24H_CHANGE < -0.15",
+            "DRAWDOWN > 0.20",
         ],
         "expected_yield_apy": "3-4% APY (mETH staking + minor USDY)",
         "personality_hint": "growth-aggressive",
@@ -129,7 +131,11 @@ def _agent2_mandate() -> dict:
         "subordination_threshold_bps": 1000,
         "max_leverage": 1.0,
         "max_single_position_bps": 6000,
-        "emergency_exit_conditions": ["drawdown > 15% over 14d"],
+        "emergency_exit_conditions": [
+            "drawdown > 15% over 14d",
+            "BTC_FUNDING_RATE > 0.0015",
+            "DRAWDOWN > 0.10",
+        ],
         "expected_yield_apy": "4-5% APY (heavy USDY + tech dividend)",
         "personality_hint": "yield-focused",
     }

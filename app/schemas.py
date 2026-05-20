@@ -435,6 +435,25 @@ class BenchmarkResponse(HelmModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Mandate condition evaluation (Bybit-backed DSL)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ConditionResult(HelmModel):
+    condition: str                 # raw text from mandate
+    parsed: bool                   # whether DSL parser understood it
+    current_value: float | None = None
+    threshold: float | None = None
+    triggered: bool
+    note: str | None = None
+
+
+class ConditionCheckResponse(HelmModel):
+    agent_id: int
+    any_triggered: bool
+    conditions: list[ConditionResult]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Holders
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -733,6 +752,7 @@ __all__ = [
     "DividendEpoch",
     "NavPoint", "NavHistoryResponse",
     "BenchmarkPoint", "BenchmarkSummary", "BenchmarkResponse",
+    "ConditionResult", "ConditionCheckResponse",
     "Holder",
     "DividendClaim", "RedemptionRequest",
     "MintPreviewRequest", "MintPreviewResponse", "SyntheticPricePreview",
