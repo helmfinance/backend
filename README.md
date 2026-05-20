@@ -4,29 +4,36 @@
 
 A founder writes a fund mandate in natural language; an AI agent autonomously
 manages the portfolio inside those constraints, posts weekly notes to holders,
-and distributes yield on-chain.
+and distributes yield on-chain. This is the **FastAPI backend**: REST surface,
+on-chain indexer, executor for AI-driven service calls, and the LLM seam for
+mandate parsing + narration.
 
-- Track: **Mantle Turing Test 2026 — AI × RWA**
-- Chain: Mantle Sepolia (chainId 5003)
-- Demo video: _TBD_
-- Live demo: _TBD_
+| | |
+| --- | --- |
+| Production API | <https://web-production-acacf1.up.railway.app> |
+| Swagger UI | [`/docs`](https://web-production-acacf1.up.railway.app/docs) |
+| OpenAPI JSON | [`/openapi.json`](https://web-production-acacf1.up.railway.app/openapi.json) |
+| Visual smoke tester | [`/static/test.html`](https://web-production-acacf1.up.railway.app/static/test.html) — vanilla JS + viem, walks every public, admin, and wallet flow |
+| Health probe | [`/health`](https://web-production-acacf1.up.railway.app/health) |
+| Chain | Mantle Sepolia (chainId `5003`) |
+| Track | Mantle Turing Test 2026 — AI × RWA |
 
 ---
 
-## What is Helm
+## What Helm does
 
-- Founder pins a mandate (asset universe, weight bands, lockup tiers, carry,
-  emergency exits) on IPFS. An LLM parser turns natural language into the
-  on-chain `MandateSchema`; protocol locks (carry = 10%, max leverage = 1.0)
-  override anything the founder says.
-- Each agent gets its own **ERC-4626 vault** (holds USDC + synthetic equities
-  + mETH + USDY), **ERC-20 share token** (transferable), and **ERC-8004
-  identity NFT** (reputation, mandate URI, weekly notes).
+- Founder writes a mandate (asset universe, weight bands, lockup tiers,
+  carry, emergency exits) in natural language. An LLM parser maps it to the
+  typed `MandateSchema`; protocol locks (`carryBps = 1000`, `maxLeverage =
+  1.0`, founder lockup ≥ 90d) override anything the founder says.
+- Each agent gets its own **ERC-4626 vault** (USDC + synthetic equities +
+  mETH + USDY), **ERC-20 share token** (transferable), and **ERC-8004
+  identity NFT** (reputation, mandate URI, lifetime stats).
 - Yield (USDY rate + mETH staking) → **90% USDC dividend to share holders,
-  10% founder carry**. Capital gains stay in NAV.
-- A 30-day incubation window gates founder-only deposits before public
-  launch. Founder shares are subordinated and locked ≥ 90 days. Mandate
-  breaches trigger automatic wind-down + reputation slash.
+  10% founder carry**. Capital gains stay in NAV — no HWM, no forced sell.
+- A 30-day incubation gates founder-only deposits before public launch.
+  Founder shares are subordinated and locked ≥ 90 days. Mandate breaches
+  trigger automatic wind-down + reputation slash.
 
 ---
 
@@ -34,25 +41,141 @@ and distributes yield on-chain.
 
 ```mermaid
 graph TB
-    FE[Frontend Next.js] -->|REST + OpenAPI| BE[FastAPI Backend]
+    FE[Frontend / Smoke-tester] -->|REST + OpenAPI| BE[FastAPI Backend]
     BE -->|web3.py + executor key| SC[Mantle Sepolia<br/>HelmRegistry + AgentVault + ...]
     BE -->|chat.completions| OAI[OpenAI gpt-4o]
     BE -->|/v2/updates| Pyth[Pyth Hermes]
-    BE -->|pin| IPFS[IPFS / local stub]
+    BE -->|/coins/markets| CG[CoinGecko]
+    BE -->|pin| IPFS[Pinata / local stub]
     SC -->|AgentRegistered, Rebalanced, ...| Indexer[Polling indexer]
-    Indexer --> DB[(SQLite / Postgres)]
+    Indexer --> DB[(SQLite — Railway volume)]
     BE --> DB
 ```
 
 | Component | Responsibility |
 | --- | --- |
-| Frontend | Marketplace listing, agent detail, mandate authoring UI |
-| FastAPI | REST API + OpenAPI source-of-truth + admin demo triggers |
-| Indexer | Polls registry / NFT / per-vault events → DB rows (idempotent) |
-| Services | `rebalance`, `harvest`, `distribute`, `nft_metadata` — chain writes |
-| Mandate parser | OpenAI function-call → typed `MandateSchema` (protocol-locked fields enforced) |
-| Narrator | Weekly markdown note per agent — pinned into NFT metadata |
-| SC layer | Registry, vault clones, NFT, dividend distributor, Pyth-priced synthetics |
+| FastAPI app (`app/main.py`) | REST surface, OpenAPI source-of-truth, admin demo triggers, static smoke-test page |
+| Indexer (`app/indexer/`) | Polls registry / NFT / per-vault / distributor / queue / founder-vault events → idempotent DB rows |
+| Services (`app/services/`) | `rebalance`, `harvest`, `distribute`, `nft_metadata`, `qualification` — chain writes via executor wallet |
+| Mandate parser (`app/mandate/parser.py`) | OpenAI function-call → typed `MandateSchema`, protocol-locked fields enforced |
+| Narrator (`app/narrator/generator.py`) | Personality-aware weekly markdown notes, pinned into NFT metadata |
+| Analytics + benchmark (`app/repos/analytics.py`, `benchmark.py`) | Sharpe / total return / max DD / reputation premium / sSPY+60-40 comparison |
+| Bybit-replacement (`app/services/coingecko_client.py`) | BTC/ETH price + 24h change for mandate emergency-exit DSL |
+
+---
+
+## Production
+
+Hosted on **Railway** (hobby plan, single web service). Indexer runs in the
+FastAPI lifespan — no separate worker. SQLite on a `/data` volume mount.
+
+| File | Purpose |
+| --- | --- |
+| `Procfile` | `web: bash ./scripts/entrypoint.sh` |
+| `scripts/entrypoint.sh` | `alembic upgrade head` → seed-if-empty → `uvicorn` on `$PORT` |
+| `railway.json` | Builder + healthcheck (`/health`, 30s) + restart policy |
+| `requirements.txt` | Pinned deps for Nixpacks `pip install -r` |
+
+After deploy, verify: `GET /health` → `{ok, db, chain}`, `/system/info`,
+`/agents`. Add the FE Vercel URL to `CORS_ORIGINS` once the frontend ships.
+
+---
+
+## Local development
+
+```bash
+git clone <repo> && cd backend
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+cp .env.example .env
+# Fill in: CRON_SIGNER_PRIVATE_KEY (executor wallet with MNT),
+#          OPENAI_API_KEY, MANTLE_SEPOLIA_RPC, deployed contract addresses
+
+python -m scripts.extract_abis     # ABIs from ../contracts/out/
+alembic upgrade head               # create / migrate SQLite schema
+python -m scripts.seed             # demo agents 9001, 9002
+uvicorn app.main:app --reload      # API + indexer on :8000
+```
+
+Or one-shot reset (kill + wipe DB + reseed + restart):
+
+```bash
+bash scripts/reset_demo.sh
+```
+
+Browse:
+
+- Swagger: <http://localhost:8000/docs>
+- Smoke tester: <http://localhost:8000/static/test.html>
+
+---
+
+## Key endpoints
+
+Full surface lives in the auto-generated [`/openapi.json`](https://web-production-acacf1.up.railway.app/openapi.json) — that
+is the master, hand-edited docs drift. Sampled below for orientation:
+
+| Route | Purpose |
+| --- | --- |
+| `GET /health` | Liveness probe (db ping + chain ping) — used by Railway healthcheck |
+| `GET /system/info` | Chain id, all deployed addresses, Pyth feed IDs, fee rates |
+| `GET /agents` | Marketplace listing — filter on phase/asset class/lockup, sort by sharpe/return/drawdown/reputation/… |
+| `GET /agents/{id}` | Full detail — mandate, positions, decisions, narrator note, performance, market premium |
+| `GET /agents/{id}/nav-history` | NAV time series (`24h / 7d / 30d / all`) |
+| `GET /agents/{id}/decisions` | Paginated decision log (Rebalance / Harvest / Distribute / WindDown) |
+| `GET /agents/{id}/benchmark` | Agent return vs sSPY 10%/yr vs 60/40 7.6%/yr — series + summary |
+| `GET /agents/{id}/conditions` | Live evaluation of mandate `emergencyExitConditions` against CoinGecko BTC/ETH |
+| `GET /agents/{id}/pyth-update-bytes` | Pyth `updateData[]` + MNT fee for the user's `vault.mint` |
+| `POST /agents/{id}/mint-preview` | Quote shares + fee for a USDC deposit (no tx) |
+| `POST /mandate/parse` | NL mandate → typed `MandateSchema` via OpenAI function-call |
+| `POST /mandate/validate` | Validate a hand-edited mandate (no LLM call) |
+| `GET /portfolio/{address}` | Per-wallet holdings, pending dividends, redemptions |
+| `GET /admin/agents/{id}/qualify` | Phase-2 qualification check (6 criteria) |
+| `POST /admin/agents/{id}/{rebalance\|harvest\|distribute\|nft-metadata}` | Manual service triggers (testnet) |
+| `POST /admin/time/advance` · `POST /admin/mint-usdc` | Demo automation (testnet) |
+| `GET /admin/debug/*` | Chain inspector — synthetic prices, adapters, treasury, indexer state, BE↔SC compare |
+
+Frontend types are generated from `/openapi.json` via `openapi-typescript`.
+**Do not hand-edit type files** — see [`../contracts/frontend-package/INTEGRATION.md`](../contracts/frontend-package/INTEGRATION.md).
+
+---
+
+## Architecture decisions
+
+1. **REIT 90/10 split, not HWM** — Yield (interest + staking) is dividended
+   90/10 to holders/founder. Capital gains stay in NAV, no forced sell. Aligns
+   founder with long-term NAV growth without the HWM griefing that broke
+   YearnV1-era vaults.
+
+2. **Push-based Pyth, FE bundles update bytes** — BE serves `updateData[]`
+   via `/agents/{id}/pyth-update-bytes`. FE attaches them to `vault.mint` with
+   `msg.value = updateFee`. Mint reverts on stale price instead of silently
+   pricing off old data. Trade-off: one extra fetch per mint, no FE crypto
+   pain.
+
+3. **Indexer is the audit log, not a cache** — Every SC state-changing call
+   emits an event; BE never queries chain state for read endpoints. Indexer
+   handlers are idempotent on `(tx_hash, log_index)`, so re-running a chunk
+   is safe. SQLite is the source of truth for the API; chain is the source of
+   truth for the indexer.
+
+4. **AI is narrator + parser, not decision-maker** — Rebalance / harvest /
+   distribute logic is **deterministic Python** (`app/services/`). LLM only
+   (a) parses NL mandates into the typed schema (function-calling, schema
+   enforced server-side), and (b) writes the weekly note (`gpt-4o`,
+   personality-aware system prompt). Decisions never depend on LLM output.
+
+5. **Preventive subordination** — `FounderVault.withdraw()` reverts past the
+   40% threshold. The attack "dev drains then triggers wind-down to escape
+   with most capital" is structurally impossible — the dev cannot reach the
+   trigger state. See [Rug-Pull Protection](#rug-pull-protection) below.
+
+6. **CoinGecko over Bybit** — Original `condition_evaluator` called Bybit
+   public API. Railway US-East egress is geo-blocked by Bybit, so every fetch
+   silently returned `None` and the condition DSL never triggered. Switched
+   to CoinGecko (no auth, no geo restriction). Funding rate is lost in the
+   trade — gracefully reported as "Metric unavailable".
 
 ---
 
@@ -61,26 +184,21 @@ graph TB
 Helm enforces founder subordination through a **preventive** mechanism —
 stronger than the spec-aligned reactive design.
 
-### Mechanism comparison
-
 | Spec | Implementation |
 | --- | --- |
 | **Reactive** (IDEA) | Allow dev withdrawal up to 50%, then trigger wind-down |
 | **Preventive** (current) | Block dev withdrawal at 40% subordination threshold |
 
-In the preventive model, the `FounderVault.withdraw()` call reverts if the
-cumulative withdrawn percentage would exceed 4000 bps (40%). This means the
-attack vector "dev drains and then triggers wind-down to escape with most
-capital" is **structurally impossible** — the dev cannot reach the trigger
-state because the contract refuses the transaction.
+`FounderVault.withdraw()` reverts if cumulative withdrawn % would exceed
+4000 bps. The "dev drains and then triggers wind-down to escape with most
+capital" attack vector is **structurally impossible** — the contract refuses
+the tx before the trigger state is reachable.
 
-Wind-down can still be initiated via:
+Wind-down can still be initiated legitimately via:
 
-- `signalWindDown()` — manual trigger by dev (legitimate exit)
+- `signalWindDown()` — manual dev exit
 - `notifyMandateBreach()` — registry-driven on mandate violation
 - Reputation slash threshold
-
-### Demo narrative
 
 > "Most rug-pull protections are reactive — they trigger after the dev has
 > already extracted capital. Helm's design is preventive: the contract
@@ -94,109 +212,52 @@ Wind-down can still be initiated via:
 ```
 backend/
 ├── app/
-│   ├── main.py              FastAPI routes + APScheduler lifespan
+│   ├── main.py              FastAPI routes + APScheduler lifespan + /health
 │   ├── config.py            pydantic-settings (.env → typed settings)
 │   ├── schemas.py           Pydantic v2 — single source of truth
-│   ├── chain/               web3 client, ABI loader, executor wallet, ABIs
-│   ├── indexer/             listener, dispatcher, per-contract handlers
-│   ├── services/            rebalance, harvest, distribute, nft_metadata
-│   ├── mandate/             parser (OpenAI), hash, IPFS pinner
-│   ├── narrator/            weekly note generator
-│   ├── repos/               SQLAlchemy queries
+│   ├── converters.py        SQLAlchemy row → Pydantic response
+│   ├── chain/               web3 client, ABI loader, executor wallet
+│   ├── indexer/             listener, dispatcher, handlers (registry/vault/nft/distributor/queue/founder)
+│   ├── services/            rebalance, harvest, distribute, nft_metadata, qualification, condition_evaluator, coingecko_client
+│   ├── mandate/             parser (OpenAI), rules, hash, IPFS pinner
+│   ├── narrator/            personality-aware weekly note generator
+│   ├── repos/               agents / analytics / benchmark / portfolio / mandates queries
 │   ├── db/                  ORM models, session, base
 │   └── hermes/              Pyth Hermes HTTP client
 ├── scripts/
+│   ├── entrypoint.sh        Railway/Docker entrypoint (migrate → seed → uvicorn)
+│   ├── reset_demo.sh        Local one-shot reset
 │   ├── extract_abis.py      forge artifacts → app/chain/abis/
-│   ├── seed.py              demo agents + holders + decisions
+│   ├── seed.py              demo agents 9001 (TEC) + 9002 (DTECH)
 │   ├── e2e_demo.py          full chain → indexer → DB pipeline validation
 │   ├── chain_smoke_test.py  read-only chain connectivity check
 │   ├── generate_notes.py    narrator CLI (supports --mock)
-│   └── debug_*.py           selector → custom-error decoders for failed txs
-└── alembic/                 DB migrations
+│   └── demo_walkthrough.md  4-min demo video script
+├── static/test.html         Vanilla JS + viem + Chart.js smoke-test page (~60 KB)
+├── alembic/                 DB migrations
+├── Procfile · railway.json · requirements.txt    Deployment
+└── pyproject.toml · .env.example
 ```
-
----
-
-## Setup
-
-```bash
-git clone <repo> && cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-
-cp .env.example .env
-# Fill in: CRON_SIGNER_PRIVATE_KEY (executor wallet with MNT),
-#          OPENAI_API_KEY, MANTLE_SEPOLIA_RPC
-
-python -m scripts.extract_abis        # copies ABIs from ../contracts/out/
-python -m scripts.seed                 # populate demo data (agent_ids 9001+)
-uvicorn app.main:app --reload          # API + indexer on :8000
-```
-
-OpenAPI: <http://localhost:8000/openapi.json> · Swagger: `/docs` · ReDoc: `/redoc`
-
----
-
-## Demo flow
-
-```bash
-# Full chain pipeline validation (~3 min)
-python -m scripts.e2e_demo
-
-# Or trigger steps manually (admin endpoints, testnet only)
-curl -X POST http://localhost:8000/admin/time/advance \
-  -H "Content-Type: application/json" -d '{"seconds": 2592000}'      # +30d
-
-curl -X POST http://localhost:8000/admin/agents/20/rebalance
-curl -X POST http://localhost:8000/admin/agents/20/harvest
-curl -X POST http://localhost:8000/admin/agents/20/distribute
-curl -X POST http://localhost:8000/admin/agents/20/nft-metadata
-```
-
-E2E covers: `registerAgent` → vault whitelist → mint via deposit → time-warp
-to public launch → rebalance → harvest → distribute → NFT metadata refresh,
-each step asserting the indexer wrote the expected DB row.
-
----
-
-## API surface (core)
-
-| Route | Purpose |
-| --- | --- |
-| `GET /system/info` | Chain id, deployed addresses, Pyth feed IDs, fee rates |
-| `GET /system/health` | Indexer + cron + LLM liveness |
-| `GET /agents` | Marketplace listing (filters, sorts) |
-| `GET /agents/{id}` | Agent detail + mandate + holdings + recent decisions |
-| `GET /agents/{id}/nav-history` | NAV time series (24h / 7d / 30d / all) |
-| `POST /mandate/parse` | NL → `MandateSchema` via OpenAI function call |
-| `POST /agents/{id}/mint-preview` | Quote shares + fee for a USDC deposit |
-| `GET /agents/{id}/pyth-update-bytes` | Pyth update bytes to bundle with `vault.deposit` |
-| `GET /portfolio/{address}` | User holdings across agents |
-| `POST /admin/time/advance` | Fast-forward `TimeProvider` (testnet only) |
-| `POST /admin/agents/{id}/{rebalance\|harvest\|distribute\|nft-metadata}` | Manual service triggers (testnet only) |
-
-Frontend types are auto-generated from `/openapi.json` via
-`openapi-typescript`; do **not** hand-edit `frontend/src/lib/api-types.gen.ts`.
 
 ---
 
 ## Tech stack
 
-- **Python 3.11+** · FastAPI · Pydantic v2 · SQLAlchemy 2.0
-- **web3.py 7.x** · eth-account · OpenAI SDK 1.50+ (mandate parser, narrator)
-- **APScheduler** (in-process indexer + cron) · slowapi (rate limit)
-- **SQLite** for hackathon (Postgres-ready via env)
-- **Mantle Sepolia** chainId 5003 · Pyth oracle · Pinata IPFS
+- **Python 3.11+** · FastAPI · Pydantic v2 · SQLAlchemy 2.0 · Alembic
+- **web3.py 7.x** · eth-account · OpenAI SDK (mandate parser, narrator)
+- **APScheduler** (in-process indexer) · slowapi (per-IP rate limit)
+- **SQLite** (Railway `/data` volume, Postgres-ready via `DATABASE_URL`)
+- **Mantle Sepolia** (chainId 5003) · **Pyth** (push oracle) · **Pinata** IPFS (local-stub fallback)
 
-The `anthropic` SDK is still installed as a fallback; switching back is a
-one-line provider swap in `app/mandate/parser.py` and
-`app/narrator/generator.py`.
+`anthropic` SDK is still installed as a one-line provider swap option in
+`app/mandate/parser.py` and `app/narrator/generator.py`.
 
 ---
 
 ## Deployed contracts (Mantle Sepolia)
 
-Full machine-readable list: [`contracts/deployments/5003.json`](../contracts/deployments/5003.json).
+Full machine-readable list: [`../contracts/deployments/5003.json`](../contracts/deployments/5003.json).
+FE-facing package (ABIs, addresses, events, constants): [`../contracts/frontend-package/`](../contracts/frontend-package/).
 
 | Contract | Address |
 | --- | --- |
@@ -217,43 +278,48 @@ Synthetic equities (Pyth-priced, USDC-collateralized): `sNVDA`, `sSPY`,
 
 ---
 
-## Deployment (Railway)
+## Testing
 
 ```bash
-# 1. Push backend/ to a GitHub repo.
-# 2. railway.app → New Project → Deploy from GitHub → pick the repo.
-# 3. Railway detects Nixpacks (Python), reads `Procfile` + `railway.json`.
-# 4. In Variables tab set every key from .env.example (mandatory: RPC, executor
-#    key, OPENAI_API_KEY, deployed contract addresses, CORS_ORIGINS).
-# 5. Add a Volume mounted at `/data` and set:
-#       DATABASE_URL=sqlite:////data/helm.db
+ruff check app/                # lint
+pytest -v                      # unit tests — placeholder slot, not yet authored
+python -m scripts.e2e_demo     # end-to-end chain → indexer → DB pipeline (~3 min)
+python -m scripts.chain_smoke_test    # read-only connectivity check
 ```
 
-| File | Purpose |
-| --- | --- |
-| `Procfile` | `web: bash ./scripts/entrypoint.sh` |
-| `scripts/entrypoint.sh` | `alembic upgrade head` → seed-if-empty → `uvicorn` on `$PORT` |
-| `railway.json` | Builder + healthcheck (`/health`, 30s) + restart policy |
-| `requirements.txt` | Pinned deps for Nixpacks `pip install -r` |
-
-Verify after deploy: `GET <railway-url>/health` (→ `{ok, db, chain}`),
-`/system/info`, `/agents`. Add the FE Vercel URL to `CORS_ORIGINS` once
-the frontend is live.
+The visual smoke tester at `/static/test.html` is the closest thing to an
+integration test today — it exercises every public, admin, and wallet flow
+in one page with explorer links for every tx.
 
 ---
 
-## Tests / lint
+## Troubleshooting
 
-```bash
-ruff check app/
-pytest -v        # tests not yet authored — slot reserved
-```
+- **Railway auto-deploy didn't trigger after push** — webhook occasionally
+  stalls. Force redeploy: empty commit `git commit --allow-empty -m "chore:
+  trigger railway redeploy" && git push`, or use the Railway CLI: `railway up`.
+- **Indexer hangs on first cycle after restart** — `seed.py` anchors
+  `IndexerState.last_synced_block` to `chain head - 100`. If the value is
+  stale (very old DB), the catch-up sweeps millions of blocks. Either re-seed
+  or manually update the row.
+- **`/conditions` shows "Metric unavailable"** — CoinGecko rate-limited (60s
+  TTL cache mitigates this) or `BTC_FUNDING_RATE` is referenced (CoinGecko
+  free tier doesn't expose funding rate; only Bybit did).
+- **MetaMask shows the wrong wallet picker each click** — `static/test.html`
+  uses EIP-6963 + caches `window.helmProvider` on first connect. Re-connect
+  if you change wallets.
+- **`waitForTransactionReceipt` timeout on Mantle Sepolia** — block time is
+  10–30s. Use `timeout: 60_000, pollingInterval: 2_000`. Timeout ≠ tx
+  failure — fall back to the explorer link.
+- **SQLite write failures on Railway** — confirm the `/data` volume is
+  mounted and `DATABASE_URL=sqlite:////data/helm.db` (four slashes for an
+  absolute path).
 
 ---
 
-## Hackathon submission
+## Further reading
 
-- Track: **Mantle Turing Test 2026 — AI × RWA**
-- Demo video: _TBD_
-- Live demo: _TBD_
-- Team: solo
+- [`../contracts/`](../contracts/) — Solidity source, deploy script, Foundry tests
+- [`../contracts/frontend-package/`](../contracts/frontend-package/) — ABIs, addresses, events, constants, FE integration guide
+- [`../contracts/IDEA.md`](../contracts/IDEA.md) — original product/protocol spec
+- [`scripts/demo_walkthrough.md`](scripts/demo_walkthrough.md) — 4-min demo video script
