@@ -277,7 +277,7 @@ def get_benchmark(agent_id: int, db: Session = Depends(get_db)):
     response_model=ConditionCheckResponse,
     responses={404: {"model": ApiError}},
     dependencies=[Depends(cache_for(60))],
-    summary="Evaluate mandate emergencyExitConditions against live Bybit market data",
+    summary="Evaluate mandate emergencyExitConditions against live CoinGecko market data",
     tags=["agents"],
 )
 def get_conditions(agent_id: int, db: Session = Depends(get_db)):
