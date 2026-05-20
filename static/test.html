@@ -5,6 +5,72 @@
   <title>Helm BE+SC Smoke Test</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <!-- viem (ES module). Bridges to window.viem for the inline script below. -->
+  <script type="module">
+    import {
+      createPublicClient, createWalletClient, custom, http,
+      parseUnits, formatUnits, parseAbi, getContract,
+    } from "https://esm.sh/viem@^2";
+
+    const mantleSepolia = {
+      id: 5003,
+      name: 'Mantle Sepolia',
+      nativeCurrency: { name: 'MNT', symbol: 'MNT', decimals: 18 },
+      rpcUrls: { default: { http: ['https://rpc.sepolia.mantle.xyz'] } },
+      blockExplorers: { default: { name: 'Mantlescan', url: 'https://sepolia.mantlescan.xyz' } },
+    };
+
+    window.viem = { createPublicClient, createWalletClient, custom, http, parseUnits, formatUnits, parseAbi, getContract };
+    window.mantleSepolia = mantleSepolia;
+    window.publicClient = createPublicClient({ chain: mantleSepolia, transport: http() });
+
+    // Minimal ABIs (string sigs → viem parseAbi)
+    window.ABIS = {
+      erc20: parseAbi([
+        'function balanceOf(address) view returns (uint256)',
+        'function allowance(address,address) view returns (uint256)',
+        'function approve(address,uint256) returns (bool)',
+        'function mint(address,uint256)',
+        'function decimals() view returns (uint8)',
+        'function symbol() view returns (string)',
+      ]),
+      vault: parseAbi([
+        'function mint(uint256 shares, address receiver, bytes[] updateData) payable returns (uint256)',
+        'function deposit(uint256 assets, address receiver, bytes[] updateData) payable returns (uint256)',
+        'function previewMint(uint256 shares) view returns (uint256)',
+        'function previewDeposit(uint256 assets) view returns (uint256)',
+        'function balanceOf(address) view returns (uint256)',
+        'function totalAssets() view returns (uint256)',
+      ]),
+      registry: parseAbi([
+        'function registerAgent(bytes32 mandateHash, string mandateURI, uint256 seedUSDC, address[] assets, (address asset, uint256 minBps, uint256 maxBps)[] weights) returns (uint256)',
+        'function agentCount() view returns (uint256)',
+      ]),
+      queue: parseAbi([
+        'function requestRedeem(uint256 agentId, uint256 shares, uint8 tier) returns (uint256)',
+        'function claim(uint256 requestId)',
+        'function cancel(uint256 requestId)',
+        'function pendingRequestsOf(address) view returns (uint256[])',
+      ]),
+      agentToken: parseAbi([
+        'function balanceOf(address) view returns (uint256)',
+        'function approve(address,uint256) returns (bool)',
+        'function symbol() view returns (string)',
+      ]),
+      founderVault: parseAbi([
+        'function withdraw(uint256 amount)',
+        'function claimCarry() returns (uint256)',
+        'function cumulativeWithdrawnBps() view returns (uint256)',
+        'function lockupEndsAt() view returns (uint64)',
+        'function totalSharesHeld() view returns (uint256)',
+        'function founder() view returns (address)',
+      ]),
+    };
+
+    window.dispatchEvent(new Event('viem-ready'));
+  </script>
+
   <style>
     .tab-btn { white-space: nowrap; border-bottom: 2px solid transparent; }
     .tab-btn.active { border-bottom-color: #2563eb; color: #2563eb; font-weight: 600; }
@@ -19,9 +85,11 @@
 <header class="bg-slate-900 text-white p-4 flex items-baseline gap-4">
   <h1 class="text-xl font-bold">⚓ Helm BE+SC Smoke Test</h1>
   <div id="status" class="text-xs text-slate-400">checking...</div>
-  <div class="ml-auto text-xs">
+  <div class="ml-auto flex items-center gap-3 text-xs">
+    <button id="connect-btn" onclick="connectWallet()" class="bg-orange-500 hover:bg-orange-600 px-3 py-1 rounded font-bold">
+      🦊 Connect MetaMask
+    </button>
     <a href="https://sepolia.mantlescan.xyz/" target="_blank" class="underline hover:text-blue-300">Explorer</a>
-    ·
     <a href="/docs" target="_blank" class="underline hover:text-blue-300">API Docs</a>
   </div>
 </header>
@@ -36,6 +104,8 @@
   <button data-tab="mint"       class="tab-btn px-4 py-3">💰 Mint Preview</button>
   <button data-tab="admin"      class="tab-btn px-4 py-3">🛠️ Admin</button>
   <button data-tab="conditions" class="tab-btn px-4 py-3">📊 Conditions</button>
+  <button data-tab="wallet"     class="tab-btn px-4 py-3">🦊 Wallet</button>
+  <button data-tab="founder"    class="tab-btn px-4 py-3">🏗️ Founder</button>
   <button data-tab="debug"      class="tab-btn px-4 py-3">🔍 Debug</button>
 </nav>
 
@@ -74,6 +144,34 @@
     <div class="bg-white p-3 rounded">
       <h3 class="font-bold text-sm mb-2">NAV vs Benchmark</h3>
       <canvas id="nav-chart" height="80"></canvas>
+    </div>
+
+    <!-- User mint (wallet sign) — hidden until wallet connects -->
+    <div id="user-mint-panel" class="hidden bg-white p-4 rounded mt-3">
+      <h3 class="font-bold mb-2 text-sm">💰 Mint shares (user wallet sign)</h3>
+      <div class="text-xs text-slate-500 mb-2">USDC.approve → fetch Pyth bytes → vault.mint</div>
+      <div class="flex items-center gap-2">
+        <input id="user-mint-amount" type="number" value="100" class="border rounded px-2 py-1 text-xs w-28">
+        <span class="text-xs text-slate-500">USDC</span>
+        <button onclick="userMint()" class="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-xs">Mint Shares</button>
+      </div>
+      <div id="user-mint-status" class="mt-2 text-xs"></div>
+    </div>
+
+    <!-- User redeem (wallet sign) -->
+    <div id="user-redeem-panel" class="hidden bg-white p-4 rounded mt-3">
+      <h3 class="font-bold mb-2 text-sm">📤 Redeem (user wallet sign)</h3>
+      <div class="flex items-center gap-2">
+        <input id="redeem-shares" type="number" placeholder="shares" class="border rounded px-2 py-1 text-xs w-28">
+        <select id="redeem-tier" class="border rounded px-2 py-1 text-xs">
+          <option value="0">Instant</option>
+          <option value="1">30 days</option>
+          <option value="2">60 days</option>
+          <option value="3">90 days</option>
+        </select>
+        <button onclick="userRedeemRequest()" class="bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-1 rounded text-xs">Request Redeem</button>
+      </div>
+      <div id="redeem-status" class="mt-2 text-xs"></div>
     </div>
   </section>
 
@@ -143,6 +241,85 @@
       <button onclick="loadConditions()" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">Evaluate</button>
     </div>
     <div id="cond-out"></div>
+  </section>
+
+  <!-- ========================================================== -->
+  <!-- Tab: Wallet                                                -->
+  <!-- ========================================================== -->
+  <section id="tab-wallet" class="tab-content hidden">
+    <h2 class="text-lg font-bold mb-3">🦊 Wallet</h2>
+
+    <div id="wallet-not-connected" class="bg-yellow-50 border border-yellow-200 p-4 rounded">
+      <p class="mb-2 text-xs">Connect MetaMask + switch to Mantle Sepolia (chainId 5003).</p>
+      <button onclick="connectWallet()" class="bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded text-xs font-bold">Connect</button>
+    </div>
+
+    <div id="wallet-connected" class="hidden">
+      <div class="bg-white p-4 rounded mb-4">
+        <div class="text-xs text-slate-500">Address</div>
+        <div id="wallet-addr" class="font-mono break-all text-xs"></div>
+        <div class="mt-3 grid grid-cols-3 gap-2 text-xs">
+          <div class="bg-slate-50 p-2 rounded"><div class="text-slate-500">MNT</div><div id="wallet-mnt" class="font-bold">—</div></div>
+          <div class="bg-slate-50 p-2 rounded"><div class="text-slate-500">USDC</div><div id="wallet-usdc" class="font-bold">—</div></div>
+          <div class="bg-slate-50 p-2 rounded"><div class="text-slate-500">Chain</div><div id="wallet-chain" class="font-bold">—</div></div>
+        </div>
+        <button onclick="refreshBalances()" class="mt-3 text-xs bg-blue-600 text-white px-3 py-1 rounded">↻ Balances</button>
+      </div>
+
+      <div class="bg-white p-4 rounded mb-4">
+        <h3 class="font-bold mb-2 text-sm">Get test USDC (via BE admin executor)</h3>
+        <div class="flex items-center gap-2">
+          <input id="usdc-mint-amount" type="number" value="10000" class="border rounded px-2 py-1 text-xs w-28">
+          <button onclick="getTestUsdc()" class="bg-purple-600 text-white px-3 py-1 rounded text-xs">Mint USDC to me</button>
+        </div>
+        <div id="usdc-mint-result" class="mt-2 text-xs"></div>
+      </div>
+
+      <div class="bg-white p-4 rounded">
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="font-bold text-sm">My agent token balances</h3>
+          <button onclick="loadMyTokenBalances()" class="text-xs bg-slate-200 px-2 py-1 rounded">↻</button>
+        </div>
+        <div id="my-tokens" class="text-xs text-slate-500">click ↻ to load</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================== -->
+  <!-- Tab: Founder                                               -->
+  <!-- ========================================================== -->
+  <section id="tab-founder" class="tab-content hidden">
+    <h2 class="text-lg font-bold mb-3">🏗️ Founder Operations</h2>
+
+    <div id="founder-not-connected" class="bg-yellow-50 border border-yellow-200 p-4 rounded text-xs">
+      Connect wallet first via the 🦊 button in the header.
+    </div>
+
+    <div id="founder-connected" class="hidden">
+      <section class="bg-white p-4 rounded mb-4">
+        <h3 class="font-bold mb-2 text-sm">Register New Agent</h3>
+        <textarea id="founder-mandate" rows="4" class="w-full border rounded p-2 text-xs"
+                  placeholder="Natural-language mandate...">Defensive yield basket — heavy USDY, mETH sleeve, equity ballast. Monthly rebalance, stop loss at 15% drawdown.</textarea>
+        <div class="flex flex-wrap gap-2 mt-2">
+          <input id="founder-name" placeholder="name" class="border rounded px-2 py-1 text-xs" value="My Agent">
+          <input id="founder-ticker" placeholder="ticker" class="border rounded px-2 py-1 text-xs w-24" value="MYAG">
+          <input id="founder-seed" type="number" value="1000" class="border rounded px-2 py-1 text-xs w-28">
+          <span class="text-xs text-slate-500 self-center">USDC seed</span>
+        </div>
+        <button onclick="founderRegister()" class="mt-2 bg-green-700 hover:bg-green-800 text-white px-4 py-2 rounded text-xs">
+          Parse + Approve + Register
+        </button>
+        <div id="founder-register-status" class="mt-2 text-xs"></div>
+      </section>
+
+      <section class="bg-white p-4 rounded">
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="font-bold text-sm">My Founder Vaults</h3>
+          <button onclick="loadMyFounderVaults()" class="text-xs bg-slate-200 px-2 py-1 rounded">↻</button>
+        </div>
+        <div id="my-founder-vaults" class="text-xs text-slate-500">click ↻ to load</div>
+      </section>
+    </div>
   </section>
 
   <!-- ========================================================== -->
@@ -350,6 +527,16 @@ async function loadDetail(agentId) {
       options: { animation: false, scales: { y: { beginAtZero: false } } },
     });
   }
+
+  // Wallet-only user action panels
+  const onChain = !!(agent.vaultAddress && agent.tokenAddress && agent.agentId < 9000);
+  if (window.userAddress && onChain) {
+    $('user-mint-panel').classList.remove('hidden');
+    $('user-redeem-panel').classList.remove('hidden');
+  } else {
+    $('user-mint-panel').classList.add('hidden');
+    $('user-redeem-panel').classList.add('hidden');
+  }
 }
 
 // ============================================================
@@ -523,6 +710,409 @@ async function compareAgent() {
     $('compare-out').innerHTML = `<div class="text-red-600 text-xs">${esc(e.message)}</div>`;
   }
 }
+
+// ============================================================
+// Wallet / MetaMask (viem)
+// ============================================================
+let SYSTEM_INFO = null;
+async function loadSystemInfo() {
+  if (SYSTEM_INFO) return SYSTEM_INFO;
+  SYSTEM_INFO = await (await fetch(`${API}/system/info`)).json();
+  return SYSTEM_INFO;
+}
+
+function symbolToAddr(symbol) {
+  if (!SYSTEM_INFO?.syntheticAssets) return null;
+  const hit = SYSTEM_INFO.syntheticAssets.find(s => s.symbol === symbol);
+  return hit?.address || null;
+}
+
+async function ensureViem() {
+  if (window.viem) return;
+  await new Promise(r => window.addEventListener('viem-ready', r, { once: true }));
+}
+
+// EIP-6963: collect every announced provider, cache the chosen one in
+// window.helmProvider so subsequent tx prompts don't re-show the wallet
+// picker every time. Falls back to window.ethereum on browsers that don't
+// implement 6963 yet.
+function discoverProviders() {
+  const found = [];
+  const onAnnounce = (ev) => found.push(ev.detail);  // { info, provider }
+  window.addEventListener('eip6963:announceProvider', onAnnounce);
+  window.dispatchEvent(new Event('eip6963:requestProvider'));
+  // Synchronous announce: providers respond immediately. Brief microtask wait
+  // covers anything that defers via queueMicrotask.
+  return new Promise(resolve => setTimeout(() => {
+    window.removeEventListener('eip6963:announceProvider', onAnnounce);
+    resolve(found);
+  }, 100));
+}
+
+async function pickProvider() {
+  if (window.helmProvider) return window.helmProvider;
+  const announced = await discoverProviders();
+  let chosen = null;
+  if (announced.length === 0) {
+    chosen = window.ethereum || null;
+  } else if (announced.length === 1) {
+    chosen = announced[0].provider;
+  } else {
+    const list = announced.map((e, i) => `${i + 1}. ${e.info?.name || 'wallet'}`).join('\n');
+    const raw = window.prompt(`Multiple wallets detected — pick one:\n${list}\n\nEnter number:`, '1');
+    const idx = Math.max(0, Math.min(announced.length - 1, parseInt(raw || '1', 10) - 1));
+    chosen = announced[idx].provider;
+  }
+  if (!chosen) return null;
+  window.helmProvider = chosen;
+  return chosen;
+}
+
+// Wait for a tx receipt with generous polling for Mantle Sepolia's slow blocks.
+// On timeout we surface a friendly message + explorer link so the user knows the
+// tx may still confirm out-of-band.
+async function waitReceipt(hash, label = 'tx') {
+  try {
+    return await window.publicClient.waitForTransactionReceipt({
+      hash,
+      timeout: 60_000,
+      pollingInterval: 2_000,
+    });
+  } catch (e) {
+    const msg = (e?.name === 'WaitForTransactionReceiptTimeoutError' || /timeout/i.test(e?.message || ''))
+      ? `Receipt timeout for ${label}. Tx may still confirm:\n${EXPLORER}/tx/${hash}`
+      : `Receipt error for ${label}: ${e.shortMessage || e.message}`;
+    const friendly = new Error(msg);
+    friendly.hash = hash;
+    friendly.original = e;
+    throw friendly;
+  }
+}
+
+window.connectWallet = async function () {
+  await ensureViem();
+  const provider = await pickProvider();
+  if (!provider) { alert('No injected wallet found (MetaMask / Rabby / Phantom etc.)'); return; }
+
+  window.walletClient = window.viem.createWalletClient({
+    chain: window.mantleSepolia,
+    transport: window.viem.custom(provider),
+  });
+
+  try {
+    const [addr] = await window.walletClient.requestAddresses();
+    window.userAddress = addr;
+  } catch (e) {
+    alert('Connection rejected: ' + (e.shortMessage || e.message));
+    return;
+  }
+
+  // Chain switch / add
+  let chainId = 0;
+  try { chainId = await window.walletClient.getChainId(); } catch {}
+  if (chainId !== 5003) {
+    try {
+      await window.walletClient.switchChain({ id: 5003 });
+    } catch {
+      try {
+        await window.walletClient.addChain({ chain: window.mantleSepolia });
+      } catch (e2) {
+        alert('Network switch failed — switch to Mantle Sepolia manually (chainId 5003).');
+        return;
+      }
+    }
+  }
+
+  await loadSystemInfo();
+
+  $('connect-btn').innerHTML = `🦊 ${window.userAddress.slice(0,6)}…${window.userAddress.slice(-4)}`;
+  $('wallet-not-connected')?.classList.add('hidden');
+  $('wallet-connected')?.classList.remove('hidden');
+  $('founder-not-connected')?.classList.add('hidden');
+  $('founder-connected')?.classList.remove('hidden');
+  $('wallet-addr').textContent = window.userAddress;
+  $('wallet-chain').textContent = '5003 ✓';
+
+  await refreshBalances();
+};
+
+window.refreshBalances = async function () {
+  if (!window.userAddress) return;
+  try {
+    const mnt = await window.publicClient.getBalance({ address: window.userAddress });
+    $('wallet-mnt').textContent = window.viem.formatUnits(mnt, 18).slice(0, 8);
+    const usdc = await window.publicClient.readContract({
+      address: SYSTEM_INFO.contracts.usdc,
+      abi: window.ABIS.erc20,
+      functionName: 'balanceOf',
+      args: [window.userAddress],
+    });
+    $('wallet-usdc').textContent = window.viem.formatUnits(usdc, 6);
+  } catch (e) {
+    console.error('refreshBalances:', e);
+  }
+};
+
+window.getTestUsdc = async function () {
+  if (!window.userAddress) { alert('Connect wallet first'); return; }
+  const usdcAmount = String(BigInt(parseInt($('usdc-mint-amount').value || '0', 10)) * 1_000_000n);
+  $('usdc-mint-result').textContent = 'sending…';
+  try {
+    const r = await fetch(`${API}/admin/mint-usdc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to: window.userAddress, amountUsdc: usdcAmount }),
+    });
+    const d = await r.json();
+    if (d.txHash) {
+      window.recentTxs.unshift({ label: 'mint USDC', txHash: d.txHash, ts: Date.now() });
+      renderRecentTxs();
+      $('usdc-mint-result').innerHTML = `✓ ${link(d.txHash, d.txHash.slice(0,12) + '…')}`;
+      setTimeout(refreshBalances, 5000);
+    } else {
+      $('usdc-mint-result').innerHTML = `<span class="text-red-700">${esc(JSON.stringify(d))}</span>`;
+    }
+  } catch (e) {
+    $('usdc-mint-result').innerHTML = `<span class="text-red-700">${esc(e.message)}</span>`;
+  }
+};
+
+window.loadMyTokenBalances = async function () {
+  if (!window.userAddress) return;
+  $('my-tokens').textContent = 'loading…';
+  try {
+    const agents = await (await fetch(`${API}/agents`)).json();
+    const candidates = (agents.items || []).filter(a => a.tokenAddress && a.agentId < 9000);
+    if (!candidates.length) { $('my-tokens').innerHTML = '<div class="text-slate-500">no on-chain agent tokens (seeds skipped)</div>'; return; }
+    const rows = await Promise.all(candidates.map(async a => {
+      try {
+        const bal = await window.publicClient.readContract({
+          address: a.tokenAddress, abi: window.ABIS.agentToken,
+          functionName: 'balanceOf', args: [window.userAddress],
+        });
+        return { a, balance: window.viem.formatUnits(bal, 18) };
+      } catch { return null; }
+    }));
+    const owned = rows.filter(r => r && parseFloat(r.balance) > 0);
+    $('my-tokens').innerHTML = owned.length
+      ? owned.map(r => `<div>#${r.a.agentId} ${esc(r.a.name)} (${esc(r.a.ticker)}): <b>${r.balance}</b> shares</div>`).join('')
+      : '<div class="text-slate-500">no agent tokens held</div>';
+  } catch (e) {
+    $('my-tokens').innerHTML = `<div class="text-red-600">${esc(e.message)}</div>`;
+  }
+};
+
+// ============================================================
+// User mint flow (Agent tab)
+// ============================================================
+window.userMint = async function () {
+  if (!window.userAddress) { alert('Connect wallet first'); return; }
+  const aid = parseInt($('detail-agent-id').value, 10);
+  const usdcAmount = BigInt(parseInt($('user-mint-amount').value, 10)) * 1_000_000n;
+  const status = $('user-mint-status');
+  const log = m => status.innerHTML += `<div>${m}</div>`;
+  status.innerHTML = '';
+
+  try {
+    const agent = await (await fetch(`${API}/agents/${aid}`)).json();
+    if (!agent.vaultAddress) { log('❌ vault address missing'); return; }
+    await loadSystemInfo();
+
+    log('1/3 USDC.approve…');
+    const approveTx = await window.walletClient.writeContract({
+      address: SYSTEM_INFO.contracts.usdc, abi: window.ABIS.erc20,
+      functionName: 'approve', args: [agent.vaultAddress, usdcAmount],
+      account: window.userAddress,
+    });
+    window.recentTxs.unshift({ label: `approve USDC #${aid}`, txHash: approveTx, ts: Date.now() });
+    renderRecentTxs();
+    log(`  ${link(approveTx, approveTx.slice(0,12))}`);
+    await waitReceipt(approveTx, 'USDC approve');
+    log('  ✓ approve confirmed');
+
+    log('2/3 fetching Pyth update bytes…');
+    const pyth = await (await fetch(`${API}/agents/${aid}/pyth-update-bytes`)).json();
+    const updateData = pyth.updateData || pyth.update_data || [];
+    const feeWei = BigInt(pyth.feeMntWei || pyth.fee_mnt_wei || pyth.updateFee || 0);
+    log(`  ${updateData.length} feeds · fee ${feeWei.toString()} wei`);
+
+    log('3/3 mint-preview → vault.mint…');
+    const preview = await (await fetch(`${API}/agents/${aid}/mint-preview`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amountUsdc: usdcAmount.toString() }),
+    })).json();
+    const shares = BigInt(preview.shares);
+    const mintTx = await window.walletClient.writeContract({
+      address: agent.vaultAddress, abi: window.ABIS.vault,
+      functionName: 'mint', args: [shares, window.userAddress, updateData],
+      value: feeWei, account: window.userAddress,
+    });
+    window.recentTxs.unshift({ label: `mint #${aid}`, txHash: mintTx, ts: Date.now() });
+    renderRecentTxs();
+    log(`  ${link(mintTx, mintTx.slice(0,12))}`);
+    await waitReceipt(mintTx, 'vault.mint');
+    log('✅ mint complete — refresh balances in Wallet tab');
+  } catch (e) {
+    log(`<span class="text-red-700">❌ ${esc(e.shortMessage || e.message)}</span>`);
+  }
+};
+
+// ============================================================
+// User redeem flow (Agent tab)
+// ============================================================
+window.userRedeemRequest = async function () {
+  if (!window.userAddress) { alert('Connect wallet first'); return; }
+  const aid = parseInt($('detail-agent-id').value, 10);
+  const sharesText = $('redeem-shares').value || '0';
+  const shares = window.viem.parseUnits(sharesText, 18);
+  const tier = parseInt($('redeem-tier').value, 10);
+  const status = $('redeem-status');
+  const log = m => status.innerHTML += `<div>${m}</div>`;
+  status.innerHTML = '';
+
+  try {
+    const agent = await (await fetch(`${API}/agents/${aid}`)).json();
+    await loadSystemInfo();
+
+    log('1/2 token.approve to RedemptionQueue…');
+    const apprTx = await window.walletClient.writeContract({
+      address: agent.tokenAddress, abi: window.ABIS.agentToken,
+      functionName: 'approve', args: [SYSTEM_INFO.contracts.redemptionQueue, shares],
+      account: window.userAddress,
+    });
+    window.recentTxs.unshift({ label: `approve token #${aid}`, txHash: apprTx, ts: Date.now() });
+    renderRecentTxs();
+    log(`  ${link(apprTx, apprTx.slice(0,12))}`);
+    await waitReceipt(apprTx, 'token approve');
+
+    log('2/2 queue.requestRedeem…');
+    const tx = await window.walletClient.writeContract({
+      address: SYSTEM_INFO.contracts.redemptionQueue, abi: window.ABIS.queue,
+      functionName: 'requestRedeem', args: [BigInt(aid), shares, tier],
+      account: window.userAddress,
+    });
+    window.recentTxs.unshift({ label: `redeem #${aid}`, txHash: tx, ts: Date.now() });
+    renderRecentTxs();
+    log(`✅ requested: ${link(tx, tx.slice(0,12))}`);
+  } catch (e) {
+    log(`<span class="text-red-700">❌ ${esc(e.shortMessage || e.message)}</span>`);
+  }
+};
+
+// ============================================================
+// Founder: register new agent + manage own founder vaults
+// ============================================================
+window.founderRegister = async function () {
+  if (!window.userAddress) { alert('Connect wallet first'); return; }
+  const status = $('founder-register-status');
+  const log = m => status.innerHTML += `<div>${m}</div>`;
+  status.innerHTML = '';
+
+  const text = $('founder-mandate').value;
+  const seedUsdc = BigInt(parseInt($('founder-seed').value, 10)) * 1_000_000n;
+  await loadSystemInfo();
+
+  try {
+    log('1/4 parsing mandate…');
+    const parsed = await (await fetch(`${API}/mandate/parse`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ naturalLanguageMandate: text }),
+    })).json();
+    if (!parsed.mandateHash) { log(`<span class="text-red-700">❌ parse failed: ${esc(JSON.stringify(parsed))}</span>`); return; }
+    log(`  ✓ hash ${parsed.mandateHash.slice(0,14)}… uri ${parsed.mandateUri?.slice(0,30)}…`);
+
+    log('2/4 USDC.approve to registry…');
+    const approveTx = await window.walletClient.writeContract({
+      address: SYSTEM_INFO.contracts.usdc, abi: window.ABIS.erc20,
+      functionName: 'approve', args: [SYSTEM_INFO.contracts.helmRegistry, seedUsdc],
+      account: window.userAddress,
+    });
+    window.recentTxs.unshift({ label: 'approve USDC (register)', txHash: approveTx, ts: Date.now() });
+    renderRecentTxs();
+    log(`  ${link(approveTx, approveTx.slice(0,12))}`);
+    await waitReceipt(approveTx, 'USDC approve (register)');
+
+    log('3/4 building weights array…');
+    const wcs = parsed.mandate?.weightConstraints || [];
+    const weights = wcs.map(w => {
+      const addr = symbolToAddr(w.asset);
+      return addr ? { asset: addr, minBps: BigInt(w.minBps), maxBps: BigInt(w.maxBps) } : null;
+    }).filter(Boolean);
+    if (!weights.length) { log(`<span class="text-red-700">❌ no resolvable assets in mandate</span>`); return; }
+    const assets = weights.map(w => w.asset);
+    log(`  ${assets.length} assets`);
+
+    log('4/4 registry.registerAgent…');
+    const regTx = await window.walletClient.writeContract({
+      address: SYSTEM_INFO.contracts.helmRegistry, abi: window.ABIS.registry,
+      functionName: 'registerAgent',
+      args: [parsed.mandateHash, parsed.mandateUri, seedUsdc, assets, weights],
+      account: window.userAddress,
+    });
+    window.recentTxs.unshift({ label: 'register agent', txHash: regTx, ts: Date.now() });
+    renderRecentTxs();
+    log(`  ${link(regTx, regTx.slice(0,12))}`);
+    const receipt = await waitReceipt(regTx, 'registerAgent');
+    log(`✅ registered at block ${receipt.blockNumber} — indexer picks up in 15-30s`);
+  } catch (e) {
+    log(`<span class="text-red-700">❌ ${esc(e.shortMessage || e.message)}</span>`);
+  }
+};
+
+window.loadMyFounderVaults = async function () {
+  if (!window.userAddress) { $('my-founder-vaults').textContent = 'connect wallet first'; return; }
+  $('my-founder-vaults').textContent = 'loading…';
+  try {
+    const d = await (await fetch(`${API}/agents`)).json();
+    const mine = (d.items || []).filter(a => a.founderAddress?.toLowerCase() === window.userAddress.toLowerCase());
+    if (!mine.length) { $('my-founder-vaults').innerHTML = '<div class="text-slate-500">no agents founded by this address</div>'; return; }
+    // Per founder vault — need vault address; AgentSummary lacks it, fetch detail
+    const rows = await Promise.all(mine.map(async a => {
+      try {
+        const detail = await (await fetch(`${API}/agents/${a.agentId}`)).json();
+        const fvAddr = detail.founderVault?.address;
+        if (!fvAddr) return { a, error: 'no founderVault address in detail' };
+        const [cum, lock, shares] = await Promise.all([
+          window.publicClient.readContract({ address: fvAddr, abi: window.ABIS.founderVault, functionName: 'cumulativeWithdrawnBps' }),
+          window.publicClient.readContract({ address: fvAddr, abi: window.ABIS.founderVault, functionName: 'lockupEndsAt' }),
+          window.publicClient.readContract({ address: fvAddr, abi: window.ABIS.founderVault, functionName: 'totalSharesHeld' }),
+        ]);
+        return { a, fvAddr, cum: Number(cum), lock: Number(lock), shares };
+      } catch (e) { return { a, error: e.shortMessage || e.message }; }
+    }));
+    $('my-founder-vaults').innerHTML = rows.map(r => r.error
+      ? `<div class="border p-2 rounded mb-1"><b>#${r.a.agentId}</b> ${esc(r.a.name)} — <span class="text-red-700">${esc(r.error)}</span></div>`
+      : `<div class="border p-2 rounded mb-1">
+          <div><b>#${r.a.agentId}</b> ${esc(r.a.name)} (${esc(r.a.ticker)})</div>
+          <div>Cumulative withdrawn: ${(r.cum/100).toFixed(2)}% / 40% cap</div>
+          <div>Lockup ends: ${new Date(r.lock * 1000).toLocaleDateString()}</div>
+          <div>Shares held: ${window.viem.formatUnits(r.shares, 18)}</div>
+          <button onclick="founderWithdraw('${r.fvAddr}', ${r.a.agentId})" class="mt-1 bg-orange-600 hover:bg-orange-700 text-white px-2 py-1 rounded text-xs">
+            Withdraw 10% of shares
+          </button>
+        </div>`).join('');
+  } catch (e) {
+    $('my-founder-vaults').innerHTML = `<div class="text-red-600">${esc(e.message)}</div>`;
+  }
+};
+
+window.founderWithdraw = async function (fvAddress, agentId) {
+  try {
+    const shares = await window.publicClient.readContract({
+      address: fvAddress, abi: window.ABIS.founderVault, functionName: 'totalSharesHeld',
+    });
+    const amount = shares / 10n;  // 10% slice
+    const tx = await window.walletClient.writeContract({
+      address: fvAddress, abi: window.ABIS.founderVault, functionName: 'withdraw',
+      args: [amount], account: window.userAddress,
+    });
+    window.recentTxs.unshift({ label: `founder withdraw #${agentId}`, txHash: tx, ts: Date.now() });
+    renderRecentTxs();
+    alert(`Tx sent: ${tx}`);
+  } catch (e) {
+    alert(`❌ ${e.shortMessage || e.message}`);
+  }
+};
 
 async function loadSynthetics() {
   $('synth-prices').innerHTML = '<div class="text-slate-500">loading…</div>';
