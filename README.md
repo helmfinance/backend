@@ -217,6 +217,31 @@ Synthetic equities (Pyth-priced, USDC-collateralized): `sNVDA`, `sSPY`,
 
 ---
 
+## Deployment (Railway)
+
+```bash
+# 1. Push backend/ to a GitHub repo.
+# 2. railway.app → New Project → Deploy from GitHub → pick the repo.
+# 3. Railway detects Nixpacks (Python), reads `Procfile` + `railway.json`.
+# 4. In Variables tab set every key from .env.example (mandatory: RPC, executor
+#    key, OPENAI_API_KEY, deployed contract addresses, CORS_ORIGINS).
+# 5. Add a Volume mounted at `/data` and set:
+#       DATABASE_URL=sqlite:////data/helm.db
+```
+
+| File | Purpose |
+| --- | --- |
+| `Procfile` | `web: bash ./scripts/entrypoint.sh` |
+| `scripts/entrypoint.sh` | `alembic upgrade head` → seed-if-empty → `uvicorn` on `$PORT` |
+| `railway.json` | Builder + healthcheck (`/health`, 30s) + restart policy |
+| `requirements.txt` | Pinned deps for Nixpacks `pip install -r` |
+
+Verify after deploy: `GET <railway-url>/health` (→ `{ok, db, chain}`),
+`/system/info`, `/agents`. Add the FE Vercel URL to `CORS_ORIGINS` once
+the frontend is live.
+
+---
+
 ## Tests / lint
 
 ```bash

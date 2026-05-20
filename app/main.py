@@ -119,10 +119,12 @@ limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# CORS — open during hackathon, tighten before public deploy.
+# CORS — origins driven by env (CORS_ORIGINS=comma-separated). Falls back to
+# ["*"] when the env var is empty so local dev keeps working untouched.
+_cors_origins = settings.cors_origins_list or ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
@@ -1265,3 +1267,30 @@ def admin_qualify_advance(agent_id: int, response: Response) -> QualificationRes
 )
 def system_health():
     _todo()
+
+
+@app.get(
+    "/health",
+    summary="Liveness probe (Railway / Docker / k8s)",
+    tags=["system"],
+)
+def health(response: Response) -> dict:
+    """Lightweight probe — DB SELECT 1 must succeed (HTTP 503 otherwise);
+    chain RPC reachability is reported but non-fatal."""
+    response.headers["Cache-Control"] = "no-store"
+    from sqlalchemy import text
+
+    try:
+        with SessionLocal() as db:
+            db.execute(text("SELECT 1"))
+    except Exception as e:
+        raise HTTPException(503, detail={"ok": False, "db": str(e)[:120]}) from e
+
+    chain_ok = True
+    try:
+        from app.chain.client import get_w3
+        _ = get_w3().eth.block_number  # property triggers an RPC call
+    except Exception:
+        chain_ok = False
+
+    return {"ok": True, "db": True, "chain": chain_ok}
