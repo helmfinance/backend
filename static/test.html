@@ -35,13 +35,20 @@
         'function decimals() view returns (uint8)',
         'function symbol() view returns (string)',
       ]),
+      // AgentVault is ERC-4626. Both deposit + mint are nonpayable / 2-arg.
+      // Pyth updateData is pushed via a SEPARATE PythPriceAdapter.updatePriceFeeds
+      // tx (see ABIS.pythAdapter below) — not bundled into deposit/mint.
       vault: parseAbi([
-        'function mint(uint256 shares, address receiver, bytes[] updateData) payable returns (uint256)',
-        'function deposit(uint256 assets, address receiver, bytes[] updateData) payable returns (uint256)',
+        'function deposit(uint256 assets, address receiver) returns (uint256)',
+        'function mint(uint256 shares, address receiver) returns (uint256)',
         'function previewMint(uint256 shares) view returns (uint256)',
         'function previewDeposit(uint256 assets) view returns (uint256)',
         'function balanceOf(address) view returns (uint256)',
         'function totalAssets() view returns (uint256)',
+      ]),
+      pythAdapter: parseAbi([
+        'function updatePriceFeeds(bytes[] updateData) payable',
+        'function getUpdateFee(bytes[] updateData) view returns (uint256)',
       ]),
       registry: parseAbi([
         'function registerAgent(bytes32 mandateHash, string mandateURI, uint256 seedUSDC, address[] assets, (address asset, uint256 minBps, uint256 maxBps)[] weights) returns (uint256)',
@@ -235,7 +242,7 @@
   <!-- Tab: Conditions                                            -->
   <!-- ========================================================== -->
   <section id="tab-conditions" class="tab-content hidden">
-    <h2 class="text-lg font-bold mb-3">📊 Mandate Conditions (Bybit-backed DSL)</h2>
+    <h2 class="text-lg font-bold mb-3">📊 Mandate Conditions (CoinGecko-backed DSL)</h2>
     <div class="flex items-center gap-2 mb-3">
       <input id="cond-agent-id" type="number" placeholder="agent_id" class="border rounded px-2 py-1" value="9001">
       <button onclick="loadConditions()" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">Evaluate</button>
@@ -584,7 +591,7 @@ async function mintPreview() {
 }
 
 // ============================================================
-// Conditions (Bybit DSL)
+// Conditions (CoinGecko DSL)
 // ============================================================
 async function loadConditions() {
   const aid = $('cond-agent-id').value;
@@ -918,7 +925,8 @@ window.userMint = async function () {
     if (!agent.vaultAddress) { log('❌ vault address missing'); return; }
     await loadSystemInfo();
 
-    log('1/3 USDC.approve…');
+    // Step 1 — USDC.approve to the vault
+    log('1/3 USDC.approve → vault…');
     const approveTx = await window.walletClient.writeContract({
       address: SYSTEM_INFO.contracts.usdc, abi: window.ABIS.erc20,
       functionName: 'approve', args: [agent.vaultAddress, usdcAmount],
@@ -930,28 +938,47 @@ window.userMint = async function () {
     await waitReceipt(approveTx, 'USDC approve');
     log('  ✓ approve confirmed');
 
-    log('2/3 fetching Pyth update bytes…');
+    // Step 2 — push Pyth update bytes directly to PythPriceAdapter (payable),
+    // BE just supplies the bytes + the MNT fee to attach.
+    log('2/3 PythPriceAdapter.updatePriceFeeds…');
     const pyth = await (await fetch(`${API}/agents/${aid}/pyth-update-bytes`)).json();
     const updateData = pyth.updateData || pyth.update_data || [];
     const feeWei = BigInt(pyth.feeMntWei || pyth.fee_mnt_wei || pyth.updateFee || 0);
     log(`  ${updateData.length} feeds · fee ${feeWei.toString()} wei`);
-
-    log('3/3 mint-preview → vault.mint…');
-    const preview = await (await fetch(`${API}/agents/${aid}/mint-preview`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ amountUsdc: usdcAmount.toString() }),
-    })).json();
-    const shares = BigInt(preview.shares);
-    const mintTx = await window.walletClient.writeContract({
-      address: agent.vaultAddress, abi: window.ABIS.vault,
-      functionName: 'mint', args: [shares, window.userAddress, updateData],
+    const pythAddr = SYSTEM_INFO.contracts.pythPriceAdapter;
+    if (!pythAddr) { log('❌ pythPriceAdapter address missing from /system/info'); return; }
+    const pythTx = await window.walletClient.writeContract({
+      address: pythAddr, abi: window.ABIS.pythAdapter,
+      functionName: 'updatePriceFeeds', args: [updateData],
       value: feeWei, account: window.userAddress,
     });
-    window.recentTxs.unshift({ label: `mint #${aid}`, txHash: mintTx, ts: Date.now() });
+    window.recentTxs.unshift({ label: `pyth update #${aid}`, txHash: pythTx, ts: Date.now() });
     renderRecentTxs();
-    log(`  ${link(mintTx, mintTx.slice(0,12))}`);
-    await waitReceipt(mintTx, 'vault.mint');
-    log('✅ mint complete — refresh balances in Wallet tab');
+    log(`  ${link(pythTx, pythTx.slice(0,12))}`);
+    await waitReceipt(pythTx, 'pyth update');
+
+    // (informational) Show projected shares so the user knows what to expect.
+    try {
+      const preview = await (await fetch(`${API}/agents/${aid}/mint-preview`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amountUsdc: usdcAmount.toString() }),
+      })).json();
+      log(`  preview: ~${preview.shares} shares`);
+    } catch { /* preview is best-effort */ }
+
+    // Step 3 — ERC-4626 deposit (assets in, shares minted to receiver). 2 args,
+    // nonpayable — Pyth was the previous tx.
+    log('3/3 vault.deposit…');
+    const depositTx = await window.walletClient.writeContract({
+      address: agent.vaultAddress, abi: window.ABIS.vault,
+      functionName: 'deposit', args: [usdcAmount, window.userAddress],
+      account: window.userAddress,
+    });
+    window.recentTxs.unshift({ label: `deposit #${aid}`, txHash: depositTx, ts: Date.now() });
+    renderRecentTxs();
+    log(`  ${link(depositTx, depositTx.slice(0,12))}`);
+    await waitReceipt(depositTx, 'vault.deposit');
+    log('✅ deposit complete — refresh balances in Wallet tab');
   } catch (e) {
     log(`<span class="text-red-700">❌ ${esc(e.shortMessage || e.message)}</span>`);
   }
