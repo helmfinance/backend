@@ -666,6 +666,24 @@ class AdminNftMetadataResponse(HelmModel):
     attribute_count: int | None = None
 
 
+class QualificationCriterion(HelmModel):
+    name: str                  # e.g. "continuous_days"
+    description: str
+    passed: bool
+    actual: str
+    threshold: str
+    note: str | None = None
+
+
+class QualificationResponse(HelmModel):
+    agent_id: int
+    overall_passed: bool
+    checks: list[QualificationCriterion]
+    advanced: bool             # True if this call triggered advanceToPublic
+    tx_hash: str | None = None
+    new_phase: str | None = None
+
+
 __all__ = [
     "Hex", "BigIntString", "UnixSeconds", "BasisPoints",
     "HelmModel",
@@ -695,4 +713,5 @@ __all__ = [
     "MintUsdcRequest", "MintUsdcResponse",
     "AdminRebalanceResponse", "AdminHarvestResponse",
     "AdminDistributeResponse", "AdminNftMetadataResponse",
+    "QualificationCriterion", "QualificationResponse",
 ]

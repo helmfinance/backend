@@ -46,6 +46,7 @@ from app.schemas import (
     AdminDistributeResponse, AdminHarvestResponse,
     AdminNftMetadataResponse, AdminRebalanceResponse,
     AgentDetail, AgentPerformance, AgentPhase, AgentSummary, ApiError, ApiErrorCode, AssetClass,
+    QualificationCriterion, QualificationResponse,
     ContractAddresses, Decision, DecisionType, FeeRates, HealthResponse,
     LockupTier, MandateParseRequest, MandateParseResponse, MandateSchema,
     MandateValidateRequest, MandateValidateResponse, MintPreviewRequest,
@@ -57,7 +58,7 @@ from app.schemas import (
 )
 from app.chain.client import time_provider, usdc
 from app.chain.executor_wallet import send_tx
-from app.services import distribute, harvest, nft_metadata, rebalance
+from app.services import distribute, harvest, nft_metadata, qualification, rebalance
 from web3 import Web3
 from app.utils.addresses import addr_or_zero
 from app.utils.cache import cache_for
@@ -862,6 +863,65 @@ def admin_nft_metadata(agent_id: int, response: Response) -> AdminNftMetadataRes
             error=ApiErrorCode.ChainUnreachable,
             message=f"nft metadata update failed: {e}",
         ).model_dump(by_alias=True)) from e
+
+
+def _qualification_to_response(agent_id: int, result: dict) -> QualificationResponse:
+    return QualificationResponse(
+        agent_id=agent_id,
+        overall_passed=result["overall_passed"],
+        checks=[QualificationCriterion(**c) for c in result["checks"]],
+        advanced=result.get("advanced", False),
+        tx_hash=result.get("tx_hash"),
+        new_phase=result.get("new_phase"),
+    )
+
+
+@app.get(
+    "/admin/agents/{agent_id}/qualify",
+    response_model=QualificationResponse,
+    responses={400: {"model": ApiError}, 503: {"model": ApiError}},
+    summary="Check Phase-2 qualification criteria (read-only, testnet only)",
+    tags=["admin"],
+)
+def admin_qualify_check(agent_id: int, response: Response) -> QualificationResponse:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    try:
+        result = qualification.evaluate(agent_id)
+    except ValueError as e:
+        raise HTTPException(400, detail=ApiError(
+            error=ApiErrorCode.BadRequest, message=str(e),
+        ).model_dump(by_alias=True)) from e
+    except Exception as e:
+        raise HTTPException(503, detail=ApiError(
+            error=ApiErrorCode.ChainUnreachable,
+            message=f"qualify check failed: {e}",
+        ).model_dump(by_alias=True)) from e
+    return _qualification_to_response(agent_id, result)
+
+
+@app.post(
+    "/admin/agents/{agent_id}/qualify",
+    response_model=QualificationResponse,
+    responses={400: {"model": ApiError}, 503: {"model": ApiError}},
+    summary="Evaluate qualification + auto-advance to PublicLaunch if passed",
+    tags=["admin"],
+)
+def admin_qualify_advance(agent_id: int, response: Response) -> QualificationResponse:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    try:
+        result = qualification.advance_if_passed(agent_id)
+    except ValueError as e:
+        raise HTTPException(400, detail=ApiError(
+            error=ApiErrorCode.BadRequest, message=str(e),
+        ).model_dump(by_alias=True)) from e
+    except Exception as e:
+        raise HTTPException(503, detail=ApiError(
+            error=ApiErrorCode.ChainUnreachable,
+            message=f"qualify advance failed: {e}",
+        ).model_dump(by_alias=True)) from e
+    return _qualification_to_response(agent_id, result)
 
 
 @app.get(
