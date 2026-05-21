@@ -1373,6 +1373,17 @@
   },
   {
     "type": "error",
+    "name": "DuplicateAsset",
+    "inputs": [
+      {
+        "name": "asset",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "ERC4626RedeemDisabled",
     "inputs": []
   },
@@ -1499,6 +1510,33 @@
     "type": "error",
     "name": "TransfersDisabled",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "WeightConstraintAssetMissing",
+    "inputs": [
+      {
+        "name": "asset",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "WeightConstraintRange",
+    "inputs": [
+      {
+        "name": "minBps",
+        "type": "uint16",
+        "internalType": "uint16"
+      },
+      {
+        "name": "maxBps",
+        "type": "uint16",
+        "internalType": "uint16"
+      }
+    ]
   },
   {
     "type": "error",

@@ -410,6 +410,11 @@
   },
   {
     "type": "error",
+    "name": "OnlyAdmin",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "ReentrancyGuardReentrantCall",
     "inputs": []
   },

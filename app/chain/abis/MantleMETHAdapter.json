@@ -450,8 +450,61 @@
   },
   {
     "type": "error",
+    "name": "InsufficientMEth",
+    "inputs": [
+      {
+        "name": "have",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "want",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "OnlyRegisteredVault",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "PriceNegative",
+    "inputs": [
+      {
+        "name": "feedId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "raw",
+        "type": "int256",
+        "internalType": "int256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "PriceStale",
+    "inputs": [
+      {
+        "name": "feedId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "publishTime",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "maxAge",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ]
   },
   {
     "type": "error",

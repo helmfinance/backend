@@ -359,6 +359,22 @@
   },
   {
     "type": "error",
+    "name": "InsufficientUSDY",
+    "inputs": [
+      {
+        "name": "have",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "want",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "OnlyRegisteredVault",
     "inputs": []
   },

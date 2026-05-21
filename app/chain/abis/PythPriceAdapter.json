@@ -193,6 +193,11 @@
   },
   {
     "type": "error",
+    "name": "LengthMismatch",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "PriceNegative",
     "inputs": [
       {
