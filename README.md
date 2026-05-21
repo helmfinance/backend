@@ -261,17 +261,17 @@ FE-facing package (ABIs, addresses, events, constants): [`../contracts/frontend-
 
 | Contract | Address |
 | --- | --- |
-| `HelmRegistry` | `0x3650636cA81d0e17ED0555d0BDD06c3576bEF9f1` |
-| `AgentNFT` (ERC-8004) | `0x0E39C35936E7862E3D38F3d3731B41C14012A349` |
-| `PlatformTreasury` | `0x21dE0b4097ea548AbC484Ea26DccCb8c04DE1b30` |
-| `YieldHarvester` | `0x8fa5cF1B5026359D0C505fC11Fba18E7a3E5f40F` |
-| `DividendDistributor` | `0xB01Dc283B6e0f00CAE786205B0DA0b58D431660a` |
-| `RedemptionQueue` | `0x6ed60895d45f7E8edF1d948e855624D4ba3672b3` |
-| `PythPriceAdapter` | `0x73032888240D85dfC8e65c5bFcdfc1FfFB960D94` |
-| `MantleMETHAdapter` | `0x73F040de5fdF22f8d54e9ceDe3618DC8CA960184` |
-| `OndoUSDYAdapter` | `0x7D71111baF3DB5Fb32a02A8463d6A79D5d421C4B` |
-| `TimeProvider` (testnet) | `0xeE2EE0131CCC97278FDb62B0DD38aAC7E80bF5AA` |
-| MockUSDC (`MockERC20`) | `0x69Bf37d6957f996C2De5d8406D250d9fB66afb1b` |
+| `HelmRegistry` | `0x069719287B7234f9B005Be16766702dD53047b84` |
+| `AgentNFT` (ERC-8004) | `0x5099bd07CEFf8B0Eb9824F0BCa52293F4b8eb2C1` |
+| `PlatformTreasury` | `0x4A19662901Cd6326fB0052BCDfbfD5b504eFd3B5` |
+| `YieldHarvester` | `0x5486eD748244f0823d48D71268Fd92735eb356d1` |
+| `DividendDistributor` | `0xc0F99830BE04835B97F07BA927589FE1c2cCbd50` |
+| `RedemptionQueue` | `0xECed7c86B3c3848f853B43519a080FB3e6815A4e` |
+| `PythPriceAdapter` | `0xe666D9e73E9AF83B0e0d21B03126661Eb1B8cB9e` |
+| `MantleMETHAdapter` | `0x8ae0c4B70a90406bb593457751029379E1779f6B` |
+| `OndoUSDYAdapter` | `0x025f9E23C5a3962505Bb580009b0c47c820dd241` |
+| `TimeProvider` (testnet) | `0x0A7aeB1c658A672C6794C36818dFFEe4bAcB082F` |
+| MockUSDC (`MockERC20`) | `0x468dAe9a460ABAb95e950d6113F199A6a0123906` |
 
 Synthetic equities (Pyth-priced, USDC-collateralized): `sNVDA`, `sSPY`,
 `sAAPL`, `sTSLA`, `sMSFT`.
