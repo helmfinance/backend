@@ -137,7 +137,7 @@ is the master, hand-edited docs drift. Sampled below for orientation:
 | `GET /admin/debug/*` | Chain inspector — synthetic prices, adapters, treasury, indexer state, BE↔SC compare |
 
 Frontend types are generated from `/openapi.json` via `openapi-typescript`.
-**Do not hand-edit type files** — see [`../contracts/frontend-package/INTEGRATION.md`](../contracts/frontend-package/INTEGRATION.md).
+**Do not hand-edit type files** — see [`https://github.com/helmfinance/contracts/blob/main/frontend-package/INTEGRATION.md`](https://github.com/helmfinance/contracts/blob/main/frontend-package/INTEGRATION.md).
 
 ---
 
@@ -231,8 +231,7 @@ backend/
 │   ├── seed.py              demo agents 9001 (TEC) + 9002 (DTECH)
 │   ├── e2e_demo.py          full chain → indexer → DB pipeline validation
 │   ├── chain_smoke_test.py  read-only chain connectivity check
-│   ├── generate_notes.py    narrator CLI (supports --mock)
-│   └── demo_walkthrough.md  4-min demo video script
+│   └── generate_notes.py    narrator CLI (supports --mock)
 ├── static/test.html         Vanilla JS + viem + Chart.js smoke-test page (~60 KB)
 ├── alembic/                 DB migrations
 ├── Procfile · railway.json · requirements.txt    Deployment
@@ -256,8 +255,8 @@ backend/
 
 ## Deployed contracts (Mantle Sepolia)
 
-Full machine-readable list: [`../contracts/deployments/5003.json`](../contracts/deployments/5003.json).
-FE-facing package (ABIs, addresses, events, constants): [`../contracts/frontend-package/`](../contracts/frontend-package/).
+Full machine-readable list: [`https://github.com/helmfinance/contracts/blob/main/deployments/5003.json`](https://github.com/helmfinance/contracts/blob/main/deployments/5003.json).
+FE-facing package (ABIs, addresses, events, constants): [`https://github.com/helmfinance/contracts/tree/main/frontend-package`](https://github.com/helmfinance/contracts/tree/main/frontend-package).
 
 | Contract | Address |
 | --- | --- |
@@ -319,7 +318,6 @@ in one page with explorer links for every tx.
 
 ## Further reading
 
-- [`../contracts/`](../contracts/) — Solidity source, deploy script, Foundry tests
-- [`../contracts/frontend-package/`](../contracts/frontend-package/) — ABIs, addresses, events, constants, FE integration guide
-- [`../contracts/IDEA.md`](../contracts/IDEA.md) — original product/protocol spec
-- [`scripts/demo_walkthrough.md`](scripts/demo_walkthrough.md) — 4-min demo video script
+- [`https://github.com/helmfinance/contracts`](https://github.com/helmfinance/contracts) — Solidity source, deploy script, Foundry tests
+- [`https://github.com/helmfinance/contracts/tree/main/frontend-package`](https://github.com/helmfinance/contracts/tree/main/frontend-package) — ABIs, addresses, events, constants, FE integration guide
+- [`https://github.com/helmfinance/contracts/blob/main/IDEA.md`](https://github.com/helmfinance/contracts/blob/main/IDEA.md) — original product/protocol spec
