@@ -2,8 +2,37 @@ import time
 
 from sqlalchemy.orm import Session
 
-from app.chain.client import get_w3, registry
+from app.chain.client import get_w3, redemption_queue, registry
+from app.chain.executor_wallet import send_tx
 from app.db import models
+
+_LOCKUP_TO_TIER = {"instant": 0, "30d": 1, "60d": 2, "90d": 3}
+
+
+def _setup_redemption_tiers(agent_id: int, mandate_dict: dict) -> None:
+    """Bridge mandate.allowedLockups → on-chain tierAllowed[agentId].
+
+    HelmRegistry.registerAgent does NOT wire the RedemptionQueue tier
+    whitelist, so without this bridge every requestRedeem reverts with
+    TierNotAllowedByMandate. Called from the indexer (executor wallet =
+    admin) after AgentRegistered, since user wallets can't reach the
+    admin-gated setAllowedTiers setter.
+    """
+    allowed = [False, False, False, False]
+    for lk in mandate_dict.get("allowedLockups", []) or []:
+        idx = _LOCKUP_TO_TIER.get(lk)
+        if idx is not None:
+            allowed[idx] = True
+    if not any(allowed):
+        print(
+            f"[indexer] agent {agent_id}: mandate has no recognized "
+            f"allowedLockups — skip setAllowedTiers"
+        )
+        return
+    send_tx(
+        redemption_queue().functions.setAllowedTiers(agent_id, allowed),
+    )
+    print(f"[indexer] agent {agent_id}: setAllowedTiers({allowed}) ✓")
 
 
 def handle_agent_registered(db: Session, event):
@@ -56,6 +85,11 @@ def handle_agent_registered(db: Session, event):
 
     blob = db.get(models.MandateBlob, mandate_hash)
     mandate_dict = blob.mandate_json if blob else {}
+
+    # Bridge before db.add: if the chain call fails, this handler raises and
+    # the dispatcher retries on the next indexer cycle (no DB row yet, so the
+    # early-return guard above won't short-circuit).
+    _setup_redemption_tiers(agent_id, mandate_dict)
 
     now = int(time.time())
     db.add(models.Agent(
