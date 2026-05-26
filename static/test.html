@@ -143,7 +143,7 @@
   <section id="tab-detail" class="tab-content hidden">
     <div class="flex items-center gap-2 mb-3">
       <h2 class="text-lg font-bold">🤖 Agent Detail</h2>
-      <input id="detail-agent-id" type="number" placeholder="agent_id" class="border rounded px-2 py-1" value="9001">
+      <input id="detail-agent-id" type="number" placeholder="agent_id" class="border rounded px-2 py-1">
       <button onclick="loadDetail(document.getElementById('detail-agent-id').value)" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">Load</button>
     </div>
     <div id="detail-body" class="mb-4"></div>
@@ -199,7 +199,7 @@
   <section id="tab-mint" class="tab-content hidden">
     <h2 class="text-lg font-bold mb-3">💰 Mint Preview (read-only)</h2>
     <div class="flex items-center gap-2 mb-3">
-      <input id="mint-agent-id" type="number" placeholder="agent_id" class="border rounded px-2 py-1" value="9001">
+      <input id="mint-agent-id" type="number" placeholder="agent_id" class="border rounded px-2 py-1">
       <input id="mint-amount" type="text" placeholder="USDC amount (6-dec)" class="border rounded px-2 py-1" value="100000000">
       <button onclick="mintPreview()" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">Preview</button>
     </div>
@@ -226,7 +226,7 @@
 
     <h3 class="font-bold text-sm mt-4 mb-1">Per-agent actions</h3>
     <div class="flex flex-wrap gap-2 mb-3 items-center">
-      <input id="admin-agent-id" type="number" placeholder="agent_id" class="border rounded px-2 py-1 text-xs w-32" value="9001">
+      <input id="admin-agent-id" type="number" placeholder="agent_id" class="border rounded px-2 py-1 text-xs w-32">
       <button onclick="adminAgent('rebalance')"    class="bg-purple-600 text-white px-3 py-2 rounded text-xs">Rebalance</button>
       <button onclick="adminAgent('harvest')"      class="bg-purple-600 text-white px-3 py-2 rounded text-xs">Harvest</button>
       <button onclick="adminAgent('distribute')"   class="bg-purple-600 text-white px-3 py-2 rounded text-xs">Distribute</button>
@@ -244,7 +244,7 @@
   <section id="tab-conditions" class="tab-content hidden">
     <h2 class="text-lg font-bold mb-3">📊 Mandate Conditions (CoinGecko-backed DSL)</h2>
     <div class="flex items-center gap-2 mb-3">
-      <input id="cond-agent-id" type="number" placeholder="agent_id" class="border rounded px-2 py-1" value="9001">
+      <input id="cond-agent-id" type="number" placeholder="agent_id" class="border rounded px-2 py-1">
       <button onclick="loadConditions()" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">Evaluate</button>
     </div>
     <div id="cond-out"></div>
@@ -346,7 +346,7 @@
     <div class="bg-white p-3 rounded mb-4">
       <div class="flex items-center gap-2 mb-2">
         <h3 class="font-bold text-sm">BE ↔ SC compare</h3>
-        <input id="debug-agent-id" type="number" placeholder="agent_id" class="border rounded px-2 py-1 text-xs" value="9001">
+        <input id="debug-agent-id" type="number" placeholder="agent_id" class="border rounded px-2 py-1 text-xs">
         <button onclick="compareAgent()" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">Compare</button>
       </div>
       <div id="compare-out" class="text-sm"></div>

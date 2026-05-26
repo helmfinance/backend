@@ -94,7 +94,7 @@ cp .env.example .env
 
 python -m scripts.extract_abis     # ABIs from ../contracts/out/
 alembic upgrade head               # create / migrate SQLite schema
-python -m scripts.seed             # demo agents 9001, 9002
+python -m scripts.seed             # registers TEC + DTECH on-chain (chain assigns agentId)
 uvicorn app.main:app --reload      # API + indexer on :8000
 ```
 
@@ -228,7 +228,7 @@ backend/
 │   ├── entrypoint.sh        Railway/Docker entrypoint (migrate → seed → uvicorn)
 │   ├── reset_demo.sh        Local one-shot reset
 │   ├── extract_abis.py      forge artifacts → app/chain/abis/
-│   ├── seed.py              demo agents 9001 (TEC) + 9002 (DTECH)
+│   ├── seed.py              chain-registers TEC (full lifecycle) + DTECH (Incubation)
 │   ├── e2e_demo.py          full chain → indexer → DB pipeline validation
 │   ├── chain_smoke_test.py  read-only chain connectivity check
 │   └── generate_notes.py    narrator CLI (supports --mock)
