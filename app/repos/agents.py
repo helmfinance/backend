@@ -292,6 +292,68 @@ def get_pyth_feeds_for_agent(
     return out
 
 
+def sweep_stale_agents(db: Session) -> dict:
+    """Delete agent rows whose vault is missing on-chain or points at a
+    different registry than the BE's configured ``settings.helm_registry``.
+
+    Called at FastAPI startup so a registry re-deploy doesn't leave the BE
+    serving stale vault addresses to clients. seed.py runs after this
+    (entrypoint.sh order) so any deleted demo agent is immediately
+    re-registered against the current chain config.
+
+    Returns ``{"kept": int, "removed": [(agent_id, reason), ...]}``. The
+    cascaded deletion follows the ``cascade="all, delete-orphan"`` setup on
+    every Agent → child relationship.
+    """
+    from web3 import Web3
+
+    from app.chain.client import agent_vault, get_w3
+    from app.config import settings
+
+    expected_registry = Web3.to_checksum_address(settings.helm_registry)
+    w3 = get_w3()
+
+    kept = 0
+    removed: list[tuple[int, str]] = []
+    rows = list(db.execute(select(Agent)).scalars())
+
+    for agent in rows:
+        try:
+            vault_addr = Web3.to_checksum_address(agent.vault_address)
+        except ValueError:
+            removed.append((agent.agent_id, "invalid-vault-address"))
+            db.delete(agent)
+            continue
+
+        code = w3.eth.get_code(vault_addr)
+        if not code or len(code) <= 2:
+            removed.append((agent.agent_id, "no-code"))
+            db.delete(agent)
+            continue
+
+        try:
+            actual_registry = Web3.to_checksum_address(
+                agent_vault(vault_addr).functions.registry().call()
+            )
+        except Exception as e:  # noqa: BLE001
+            removed.append((agent.agent_id, f"registry-call-failed: {type(e).__name__}"))
+            db.delete(agent)
+            continue
+
+        if actual_registry != expected_registry:
+            removed.append(
+                (agent.agent_id, f"stale-registry={actual_registry[:10]}…")
+            )
+            db.delete(agent)
+        else:
+            kept += 1
+
+    if removed:
+        db.commit()
+
+    return {"kept": kept, "removed": removed}
+
+
 __all__ = [
     "FounderVault",
     "WindDownState",
@@ -309,4 +371,5 @@ __all__ = [
     "sum_harvested_usdc",
     "get_nav_history",
     "get_pyth_feeds_for_agent",
+    "sweep_stale_agents",
 ]

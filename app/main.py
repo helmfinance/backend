@@ -90,6 +90,22 @@ scheduler = BackgroundScheduler()
 async def lifespan(app: FastAPI):
     # Lazy import so test imports don't drag the chain client.
     from app.indexer.listener import run_one_cycle
+    from app.repos.agents import sweep_stale_agents
+
+    # Sweep stale agents (vault missing on-chain or pointing at a different
+    # registry) before the indexer wakes up. Protects /agents responses from
+    # leaking vaults that were created against a prior registry deploy.
+    try:
+        from app.db import SessionLocal
+        with SessionLocal() as db:
+            stats = sweep_stale_agents(db)
+        if stats["removed"]:
+            print(f"[startup] swept {len(stats['removed'])} stale agent(s): "
+                  f"{stats['removed']}")
+        else:
+            print(f"[startup] sweep clean: {stats['kept']} agent(s) valid")
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] sweep skipped ({type(e).__name__}: {e})")
 
     scheduler.add_job(
         run_one_cycle,
