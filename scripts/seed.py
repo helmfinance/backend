@@ -132,9 +132,17 @@ def _seed_one(mandate: dict, *, full_lifecycle: bool, deposit_amount: int) -> No
     if full_lifecycle:
         print(f"[seed] {mandate['ticker']} → full lifecycle "
               f"(deposit + advance + services)")
-        step2_deposit(agent_id, deposit_amount)
-        step3_advance_phase(agent_id)
-        step4_run_services(agent_id)
+        # Wrap so a partial failure (e.g. rebalance revert from Pyth staleness
+        # or amount math) doesn't sink the whole seed run — DTECH still needs
+        # to register, and the agent itself is already on-chain. Operators can
+        # retry the failed step via POST /admin/agents/{id}/{rebalance|...}.
+        try:
+            step2_deposit(agent_id, deposit_amount)
+            step3_advance_phase(agent_id)
+            step4_run_services(agent_id)
+        except Exception as e:  # noqa: BLE001
+            print(f"[seed] {mandate['ticker']} lifecycle partial fail: "
+                  f"{type(e).__name__}: {e} — continuing to next agent")
     else:
         print(f"[seed] {mandate['ticker']} stays in Incubation (register only)")
 
