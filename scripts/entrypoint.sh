@@ -7,20 +7,14 @@ set -e
 echo "[entrypoint] applying migrations..."
 alembic upgrade head
 
-# Seed only when the DB is empty (idempotent boot — won't clobber prod data).
-ROW_COUNT=$(python -c "
-from app.db import SessionLocal
-from app.db.models import Agent
-with SessionLocal() as db:
-    print(db.query(Agent).count())
-" 2>/dev/null || echo "0")
-
-if [ "$ROW_COUNT" = "0" ]; then
-    echo "[entrypoint] empty DB → seeding demo data..."
-    python -m scripts.seed || echo "[entrypoint] WARN: seed failed (non-fatal)"
-else
-    echo "[entrypoint] DB has $ROW_COUNT agents → skip seed"
-fi
+# seed.py is self-idempotent — it sweeps stale agents first, then registers
+# only mandates whose mandate_hash isn't already in the DB. Safe to call on
+# every boot. Background so Railway healthcheck (30s) sees uvicorn come up
+# immediately: full chain register + 31d advance + rebalance/harvest/distribute
+# can take 3-5 minutes. Seed progress → /tmp/seed.log (tail via railway logs).
+echo "[entrypoint] launching seed in background..."
+python -m scripts.seed > /tmp/seed.log 2>&1 &
+echo "[entrypoint] seed PID=$! (log: /tmp/seed.log)"
 
 PORT=${PORT:-8000}
 echo "[entrypoint] starting uvicorn on 0.0.0.0:$PORT"

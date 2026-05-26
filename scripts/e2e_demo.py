@@ -60,6 +60,23 @@ ASSET_KIND_METH = 1
 ASSET_KIND_USDY = 2
 
 
+def _resolve_asset(symbol: str) -> tuple[str, int]:
+    """Symbol → (on-chain address, AssetKind enum). Mirrors the mandate parser's
+    universe; raises on unknown symbol (rather than silently dropping)."""
+    table = {
+        "sNVDA": (settings.snvda, ASSET_KIND_SYNTHETIC),
+        "sSPY":  (settings.sspy,  ASSET_KIND_SYNTHETIC),
+        "sAAPL": (settings.saapl, ASSET_KIND_SYNTHETIC),
+        "sTSLA": (settings.stsla, ASSET_KIND_SYNTHETIC),
+        "sMSFT": (settings.smsft, ASSET_KIND_SYNTHETIC),
+        "mETH":  (settings.mantle_meth_adapter, ASSET_KIND_METH),
+        "USDY":  (settings.ondo_usdy_adapter,   ASSET_KIND_USDY),
+    }
+    if symbol not in table:
+        raise ValueError(f"unknown asset symbol in mandate: {symbol}")
+    return table[symbol]
+
+
 # ─── Step 0: 환경 점검 ────────────────────────────────────────────────────────
 
 
@@ -113,32 +130,38 @@ def wait_for_indexer(
 # ─── Step 1: registerAgent ───────────────────────────────────────────────────
 
 
-def step1_register_agent() -> int:
-    """Register a brand-new agent. Returns new agent_id."""
+def step1_register_agent(mandate_json: dict | None = None) -> dict:
+    """Register a brand-new agent. Returns {"agent_id", "vault_addr"}.
+
+    ``mandate_json`` lets callers (seed.py) supply pre-built mandates with
+    arbitrary asset universes. When ``None`` falls back to the default
+    sNVDA + USDY E2E test mandate.
+    """
     now = int(time.time())
-    mandate_json = {
-        "version": "1.0",
-        "name": f"E2E Test Agent {now}",
-        "ticker": "E2E",
-        "description": f"End-to-end test agent created at {now}",
-        "assetClasses": ["equity", "treasury"],
-        "targetUniverse": ["sNVDA", "USDY"],
-        "weightConstraints": [
-            {"asset": "sNVDA", "minBps": 4000, "maxBps": 6000},
-            {"asset": "USDY", "minBps": 4000, "maxBps": 6000},
-        ],
-        "rebalanceFrequency": "weekly",
-        "rebalanceTriggers": ["NAV drift > 5%"],
-        "allowedLockups": ["30d"],
-        "minimumDepositUsdc": "10000000",
-        "founderShareBps": 1000,
-        "carryBps": 1000,
-        "founderLockupDays": 180,
-        "subordinationThresholdBps": 5000,
-        "maxLeverage": 1.0,
-        "maxSinglePositionBps": 6000,
-        "emergencyExitConditions": ["Drawdown > 25%"],
-    }
+    if mandate_json is None:
+        mandate_json = {
+            "version": "1.0",
+            "name": f"E2E Test Agent {now}",
+            "ticker": "E2E",
+            "description": f"End-to-end test agent created at {now}",
+            "assetClasses": ["equity", "treasury"],
+            "targetUniverse": ["sNVDA", "USDY"],
+            "weightConstraints": [
+                {"asset": "sNVDA", "minBps": 4000, "maxBps": 6000},
+                {"asset": "USDY", "minBps": 4000, "maxBps": 6000},
+            ],
+            "rebalanceFrequency": "weekly",
+            "rebalanceTriggers": ["NAV drift > 5%"],
+            "allowedLockups": ["30d"],
+            "minimumDepositUsdc": "10000000",
+            "founderShareBps": 1000,
+            "carryBps": 1000,
+            "founderLockupDays": 180,
+            "subordinationThresholdBps": 5000,
+            "maxLeverage": 1.0,
+            "maxSinglePositionBps": 6000,
+            "emergencyExitConditions": ["Drawdown > 25%"],
+        }
 
     mandate_hash = compute_mandate_hash(mandate_json)
     mandate_uri, _ = pin_mandate(mandate_json, mandate_hash)
@@ -170,16 +193,15 @@ def step1_register_agent() -> int:
         Web3.to_checksum_address(settings.helm_registry), seed_amount,
     ))
 
-    # AssetEntry tuples (address, AssetKind)
-    assets = [
-        (Web3.to_checksum_address(settings.snvda), ASSET_KIND_SYNTHETIC),
-        (Web3.to_checksum_address(settings.ondo_usdy_adapter), ASSET_KIND_USDY),
-    ]
-    # WeightConstraint tuples (address, uint16 minBps, uint16 maxBps)
-    weight_constraints = [
-        (Web3.to_checksum_address(settings.snvda), 4000, 6000),
-        (Web3.to_checksum_address(settings.ondo_usdy_adapter), 4000, 6000),
-    ]
+    # Derive AssetEntry + WeightConstraint tuples from the mandate's own
+    # weightConstraints, so each agent uses its declared asset universe.
+    assets: list[tuple[str, int]] = []
+    weight_constraints: list[tuple[str, int, int]] = []
+    for wc in mandate_json["weightConstraints"]:
+        addr, kind = _resolve_asset(wc["asset"])
+        checksum = Web3.to_checksum_address(addr)
+        assets.append((checksum, kind))
+        weight_constraints.append((checksum, int(wc["minBps"]), int(wc["maxBps"])))
 
     result = send_tx(
         registry().functions.registerAgent(
