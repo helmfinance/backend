@@ -62,6 +62,38 @@ graph TB
 | Analytics + benchmark (`app/repos/analytics.py`, `benchmark.py`) | Sharpe / total return / max DD / reputation premium / sSPY+60-40 comparison |
 | Bybit-replacement (`app/services/coingecko_client.py`) | BTC/ETH price + 24h change for mandate emergency-exit DSL |
 
+### Startup hook
+
+FastAPI's `lifespan` runs `app.repos.agents.sweep_stale_agents()` **before**
+the indexer wakes up: each Agent row whose `vault.registry()` doesn't match
+the BE's configured `helm_registry` env, or whose vault has no on-chain
+code, is `cascade`-deleted (along with positions, NavPoints, decisions,
+holders, dividend epochs, founder vault, etc.). This makes a registry
+re-deploy non-fatal — the next BE boot self-cleans, then `scripts/seed.py`
+re-registers the demo agents against the current chain config.
+
+### `scripts/seed.py` — chain-backed, idempotent
+
+Background-launched by `scripts/entrypoint.sh` on every boot. Flow:
+
+1. Sweep stale agents (defense in depth — the lifespan also calls this, but
+   seed runs as a background process so the order can interleave).
+2. For each demo mandate (TEC, DTECH), compute `mandate_hash`. If a row
+   already exists for that hash, skip. Otherwise:
+   - Self-mint 1000 USDC via `MockERC20.mint` (executor key is registered
+     as a `MockERC20` minter on testnet — chainId-gated).
+   - `registry.registerAgent(...)` on-chain. The indexer picks up the
+     `AgentRegistered` event and inserts the Agent row with the chain-
+     assigned `agentId`. **Legacy IDs 9001 / 9002 are gone — chain decides.**
+3. For TEC only, run the full lifecycle: `step2_deposit` → `step3` time-
+   advance + `advanceToPublic` → `step4` rebalance + harvest + distribute
+   + nft_metadata. A partial failure here (e.g. a rebalance revert from
+   Pyth amount math) is caught and logged — DTECH still gets registered.
+
+Backgrounding seed is what keeps Railway's 30 s healthcheck happy: the
+full lifecycle takes 3–5 min, but uvicorn comes up immediately. Seed
+progress is written to `/tmp/seed.log` inside the container.
+
 ---
 
 ## Production
