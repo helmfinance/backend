@@ -32,6 +32,7 @@ from app.chain.client import (
     agent_vault,
     get_w3,
     pyth_adapter,
+    redemption_queue,
     registry,
     time_provider,
     usdc,
@@ -228,6 +229,21 @@ def step1_register_agent(mandate_json: dict | None = None) -> dict:
     deployment = args["deployment"]
     vault_addr = deployment["vault"] if "vault" in deployment else deployment[3]
     print(f"[step1] new agent_id: {agent_id}, vault: {vault_addr}")
+
+    # registerAgent does NOT wire RedemptionQueue tier whitelist; without this
+    # call every requestRedeem reverts with TierNotAllowedByMandate. Mirror the
+    # mandate's allowedLockups into chain state via the admin-gated setter.
+    _LOCKUP_TO_TIER = {"instant": 0, "30d": 1, "60d": 2, "90d": 3}
+    allowed = [False, False, False, False]
+    for lk in mandate_json.get("allowedLockups", []):
+        idx = _LOCKUP_TO_TIER.get(lk)
+        if idx is not None:
+            allowed[idx] = True
+    if any(allowed):
+        send_tx(redemption_queue().functions.setAllowedTiers(agent_id, allowed))
+        print(f"[step1] setAllowedTiers({agent_id}, {allowed}) ✓")
+    else:
+        print(f"[step1] WARN: mandate has no recognized allowedLockups — skipping setAllowedTiers")
 
     wait_for_indexer(
         lambda: _agent_exists(agent_id),
