@@ -796,6 +796,90 @@ def _check_testnet() -> None:
 
 
 @app.post(
+    "/admin/agents/{agent_id}/register-with-synthetics",
+    responses={404: {"model": ApiError}, 503: {"model": ApiError}},
+    summary="Register agent vault with all synthetic assets (testnet only)",
+    tags=["admin"],
+)
+def admin_register_with_synthetics(agent_id: int, response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    with SessionLocal() as db:
+        from app.db.models import Agent
+        a = db.get(Agent, agent_id)
+    if not a:
+        raise HTTPException(404, detail=ApiError(
+            error=ApiErrorCode.NotFound, message=f"Agent {agent_id} not found",
+        ).model_dump(by_alias=True))
+    from app.chain.client import contract_at
+    from web3 import Web3
+    vault_addr = Web3.to_checksum_address(a.vault_address)
+    results = {}
+    for sym, addr in [
+        ("sNVDA", settings.snvda), ("sSPY", settings.sspy),
+        ("sAAPL", settings.saapl), ("sTSLA", settings.stsla),
+        ("sMSFT", settings.smsft),
+    ]:
+        try:
+            c = contract_at("SyntheticAsset", addr)
+            if c.functions.registeredVaults(vault_addr).call():
+                results[sym] = "already-registered"
+                continue
+            tx = send_tx(c.functions.registerVault(vault_addr))["tx_hash"]
+            results[sym] = tx
+        except Exception as e:
+            results[sym] = f"err: {str(e)[:120]}"
+    return {"agentId": agent_id, "vault": vault_addr, "registrations": results}
+
+
+@app.post(
+    "/admin/wipe-all",
+    responses={503: {"model": ApiError}},
+    summary="Wipe all indexer data — fresh restart for redeployed contracts (testnet only)",
+    tags=["admin"],
+)
+def admin_wipe_all(response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    from sqlalchemy import delete
+    from app.db import (
+        Agent, Decision, DividendClaim, DividendEpoch, FounderVault,
+        Holder, IndexerState, NarratorNote, NavPoint, Position,
+        RedemptionRequest, WindDownState,
+    )
+    from app.db.models import MandateBlob
+    with SessionLocal() as db:
+        for model in (
+            DividendClaim, Position, NavPoint, Decision, DividendEpoch,
+            Holder, RedemptionRequest, NarratorNote, FounderVault,
+            WindDownState, MandateBlob, IndexerState, Agent,
+        ):
+            db.execute(delete(model))
+        db.commit()
+    return {"ok": True}
+
+
+@app.post(
+    "/admin/time/reset",
+    responses={503: {"model": ApiError}},
+    summary="Reset TimeProvider offset to 0 (testnet only)",
+    tags=["admin"],
+)
+def admin_time_reset(response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    try:
+        tx_hash = send_tx(time_provider().functions.reset())["tx_hash"]
+        new_time = time_provider().functions.currentTime().call()
+        return {"tx_hash": tx_hash, "new_current_time": new_time}
+    except Exception as e:
+        raise HTTPException(503, detail=ApiError(
+            error=ApiErrorCode.ChainUnreachable,
+            message=f"time reset failed: {e}",
+        ).model_dump(by_alias=True)) from e
+
+
+@app.post(
     "/admin/time/advance",
     response_model=TimeAdvanceResponse,
     responses={400: {"model": ApiError}, 503: {"model": ApiError}},
