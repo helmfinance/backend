@@ -223,16 +223,17 @@ def get_agent(agent_id: int, db: Session = Depends(get_db)):
 
     cash_usdc = "0"
     yield_pool = "0"
+    import logging
+    log = logging.getLogger(__name__)
+    log.warning("[get_agent] CASHFIX_V2 agent=%s vault=%s", agent_id, a.vault_address)
     try:
         from app.chain.client import agent_vault
         vault = agent_vault(a.vault_address)
         cash_usdc = str(vault.functions.cashUSDC().call())
         yield_pool = str(vault.functions.yieldPool().call())
+        log.warning("[get_agent] CASHFIX_V2 ok cash=%s yield=%s", cash_usdc, yield_pool)
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning(
-            "[main] agent %s cash/yield chain read failed: %s", agent_id, e,
-        )
+        log.warning("[get_agent] CASHFIX_V2 chain read failed: %s", e)
 
     detail = converters.to_agent_detail(
         a,
