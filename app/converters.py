@@ -215,6 +215,8 @@ def to_agent_detail(
     recent_decisions: list[db_models.Decision],
     latest_narrator_note: db_models.NarratorNote | None,
     redemption_queue: dict,
+    cash_usdc: str = "0",
+    yield_pool: str = "0",
 ) -> schemas.AgentDetail:
     mandate_schema: schemas.MandateSchema | None = None
     if a.mandate:
@@ -239,8 +241,8 @@ def to_agent_detail(
         mandate_uri=a.mandate_uri,
         mandate_hash=a.mandate_hash,
         positions=[to_position(p) for p in a.positions],
-        cash_usdc="0",
-        yield_pool="0",
+        cash_usdc=cash_usdc,
+        yield_pool=yield_pool,
         founder_vault=to_founder_vault_snapshot(a.founder_vault) if a.founder_vault else None,
         recent_dividends=[to_dividend_epoch(d) for d in recent_dividends],
         recent_decisions=[to_decision(d) for d in recent_decisions],

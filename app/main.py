@@ -220,6 +220,20 @@ def get_agent(agent_id: int, db: Session = Depends(get_db)):
     a = agent_repo.get_agent(db, agent_id)
     if a is None:
         raise _api_error(404, ApiErrorCode.NotFound, f"Agent {agent_id} not found")
+
+    cash_usdc = "0"
+    yield_pool = "0"
+    try:
+        from app.chain.client import agent_vault
+        vault = agent_vault(a.vault_address)
+        cash_usdc = str(vault.functions.cashUSDC().call())
+        yield_pool = str(vault.functions.yieldPool().call())
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(
+            "[main] agent %s cash/yield chain read failed: %s", agent_id, e,
+        )
+
     detail = converters.to_agent_detail(
         a,
         current_nav=agent_repo.get_latest_nav(db, agent_id),
@@ -230,6 +244,8 @@ def get_agent(agent_id: int, db: Session = Depends(get_db)):
         recent_decisions=agent_repo.get_recent_decisions(db, agent_id),
         latest_narrator_note=agent_repo.get_latest_narrator_note(db, agent_id),
         redemption_queue=agent_repo.get_redemption_queue_snapshot(db, agent_id),
+        cash_usdc=cash_usdc,
+        yield_pool=yield_pool,
     )
     detail.performance = AgentPerformance(**analytics_repo.compute_performance(db, agent_id))
     return detail
