@@ -2,6 +2,7 @@ import time
 
 from sqlalchemy.orm import Session
 
+from app.chain.client import founder_vault as founder_vault_contract
 from app.chain.client import get_w3, redemption_queue, registry
 from app.chain.executor_wallet import send_tx
 from app.db import models
@@ -109,6 +110,30 @@ def handle_agent_registered(db: Session, event):
         reputation=10000,
         created_at=now,
     ))
+
+    # Seed a FounderVault row at the same time so the /agents/{id} and
+    # /portfolio responses don't return null for the founder lifecycle UI.
+    # Pull initial state from chain (FounderVault view fns) — subsequent
+    # updates flow in via the dedicated founder.* event handlers.
+    try:
+        fv = founder_vault_contract(fv_addr)
+        shares_held = int(fv.functions.totalSharesHeld().call())
+        lockup_ends_at = int(fv.functions.lockupEndsAt().call())
+        carry_balance = int(fv.functions.carryBalance().call())
+        is_sub_active = bool(fv.functions.isSubordinationActive().call())
+        db.add(models.FounderVault(
+            agent_id=agent_id,
+            address=fv_addr.lower(),
+            shares_held=str(shares_held),
+            lockup_ends_at=lockup_ends_at,
+            cumulative_withdrawn_bps=0,
+            is_subordination_active=is_sub_active,
+            carry_balance_usdc=str(carry_balance),
+        ))
+    except Exception as e:
+        # Don't block agent indexing on FounderVault read failure — founder
+        # event handlers will fill it in later.
+        print(f"[indexer] agent {agent_id}: FounderVault seed failed: {e}")
 
 
 def handle_phase_advanced(db: Session, event):

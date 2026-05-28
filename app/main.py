@@ -335,8 +335,17 @@ def list_agent_decisions(
     type: DecisionType | None = Query(None),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
-):
-    _todo()
+    db: Session = Depends(get_db),
+) -> Page[Decision]:
+    rows, total = agent_repo.list_decisions_paginated(
+        db, agent_id,
+        type_=type.value if type else None,
+        limit=limit, offset=offset,
+    )
+    return Page[Decision](
+        items=[converters.to_decision(d) for d in rows],
+        total=total, limit=limit, offset=offset,
+    )
 
 
 @app.post(
@@ -635,8 +644,37 @@ def parse_mandate(
     summary="Validate hand-edited mandate (no LLM)",
     tags=["mandate"],
 )
-def validate_mandate(req: MandateValidateRequest):
-    _todo()
+def validate_mandate(
+    req: MandateValidateRequest,
+    db: Session = Depends(get_db),
+) -> MandateValidateResponse:
+    """Runs protocol rule checks on a manually-edited mandate, re-computes
+    canonical hash, and upserts the mandate blob so on-chain register can
+    pick it up. No LLM involved.
+
+    cache-buster: BE-FIXES-V2-2026-05-28
+    """
+    print("[validate_mandate] BE-FIXES-V2 invoked", flush=True)
+    try:
+        normalized, _warnings = rules.validate_and_normalize(req.mandate)
+    except rules.MandateValidationError as e:
+        return MandateValidateResponse(valid=False, errors=e.errors, hash=None)
+
+    mandate_dict = normalized.model_dump(by_alias=True)
+    mandate_hash = compute_mandate_hash(mandate_dict)
+    try:
+        ipfs_uri, pinned = pin_mandate(mandate_dict, mandate_hash)
+    except Exception:
+        ipfs_uri, pinned = f"ipfs://local-{mandate_hash[2:]}", False
+    mandates_repo.upsert_mandate_blob(
+        db,
+        mandate_hash=mandate_hash,
+        mandate_dict=mandate_dict,
+        raw_text="",
+        ipfs_uri=ipfs_uri,
+        pinned=pinned,
+    )
+    return MandateValidateResponse(valid=True, errors=[], hash=mandate_hash)
 
 
 # ─── Portfolio ───────────────────────────────────────────────────────────────

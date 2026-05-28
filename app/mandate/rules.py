@@ -12,6 +12,18 @@ PROTOCOL_LOCKED_MAX_LEVERAGE = 1.0
 CANONICAL_ASSETS = {"sNVDA", "sSPY", "sAAPL", "sMSFT", "sTSLA", "mETH", "USDY"}
 ALLOWED_REBALANCE_FREQ = {"daily", "weekly", "monthly", "event-driven"}
 
+# Mapping for LLM weight-class → individual symbols. Used when the parser
+# returns weightConstraints keyed by asset *class* ("equity", "treasury", …)
+# instead of individual ticker symbols. We split the class band evenly
+# across symbols of that class that also appear in targetUniverse.
+ASSET_CLASS_TO_SYMBOLS = {
+    "equity":   {"sNVDA", "sSPY", "sAAPL", "sMSFT", "sTSLA"},
+    "crypto":   {"mETH"},
+    "treasury": {"USDY"},
+    "cash":     set(),  # cash = USDC, not a tradeable asset
+    "mixed":    {"sNVDA", "sSPY", "sAAPL", "sMSFT", "sTSLA", "mETH", "USDY"},
+}
+
 
 class MandateValidationError(Exception):
     def __init__(self, errors: list[str]):
@@ -29,6 +41,40 @@ def validate_and_normalize(
     """
     warnings: list[str] = []
     errors: list[str] = []
+
+    # 0. Expand class-keyed weightConstraints to per-symbol entries.
+    # The LLM sometimes outputs `{"asset": "equity", minBps: 6000, maxBps: 8000}`
+    # — but the on-chain registerAgent only accepts ticker symbols. Split the
+    # class band evenly across symbols in targetUniverse that belong to that
+    # class (drops the class entry and adds N symbol entries).
+    if mandate.weight_constraints:
+        from app.schemas import WeightConstraint
+        universe = set(mandate.target_universe or [])
+        expanded: list[WeightConstraint] = []
+        for c in mandate.weight_constraints:
+            if c.asset in universe:
+                expanded.append(c)
+                continue
+            class_syms = ASSET_CLASS_TO_SYMBOLS.get(c.asset, set()) & universe
+            if not class_syms:
+                warnings.append(
+                    f"Dropping weight constraint for unknown asset '{c.asset}'"
+                )
+                continue
+            n = len(class_syms)
+            # Split the band evenly across each symbol, with a ±100bps cushion
+            # so floor-division doesn't push us below sum-min.
+            per_min = max(0, c.min_bps // n - 100)
+            per_max = min(10000, (c.max_bps + n - 1) // n + 100)
+            for s in sorted(class_syms):
+                expanded.append(WeightConstraint(
+                    asset=s, min_bps=per_min, max_bps=per_max,
+                ))
+            warnings.append(
+                f"Expanded class '{c.asset}' weight {c.min_bps}-{c.max_bps}bps "
+                f"into {n} symbols at {per_min}-{per_max}bps each."
+            )
+        mandate = mandate.model_copy(update={"weight_constraints": expanded})
 
     # 1. Protocol-locked overrides
     if mandate.carry_bps != PROTOCOL_LOCKED_CARRY_BPS:

@@ -51,19 +51,23 @@ def execute(agent_id: int) -> dict:
         vault_addr = Web3.to_checksum_address(agent.vault_address)
         vault = agent_vault(agent.vault_address)
 
-        # 1) Use cashUSDC (USDC balance minus reserved yieldPool) for sizing.
+        # 1) Use totalAssets (NAV) as the sizing base — not just cashUSDC.
+        # After the first rebalance the cash is mostly drained into positions,
+        # so cashUSDC-based sizing collapses every subsequent rebalance target
+        # to ~0 (which then forces step-1 sell of nearly everything). NAV is
+        # the same on first and Nth rebalance, so target weights stay stable.
         # Leave headroom equal to the on-chain rebalance fee so the post-buy
         # cashUSDC still covers `_payFee` (else InsufficientCash() revert).
-        cash_usdc = vault.functions.cashUSDC().call()
-        if cash_usdc == 0:
+        nav = vault.functions.totalAssets().call()
+        if nav == 0:
             raise ValueError(
-                f"Vault {vault_addr} has 0 cashUSDC — cannot rebalance",
+                f"Vault {vault_addr} has 0 NAV — cannot rebalance",
             )
         try:
             fee_bps = int(platform_treasury().functions.feeRate(2).call())  # FeeKind.Rebalance = 2
         except Exception:
             fee_bps = 5  # conservative fallback matching the deployed default
-        usdc_balance = cash_usdc * (10_000 - fee_bps - 1) // 10_000  # extra 1bps cushion
+        usdc_balance = nav * (10_000 - fee_bps - 1) // 10_000  # extra 1bps cushion
 
         # 2) Refresh Pyth feeds for synthetic targets BEFORE asking SyntheticAsset
         # for priceUSDC (else `getPriceUsdc` reverts with PriceStale).
@@ -72,6 +76,9 @@ def execute(agent_id: int) -> dict:
             _refresh_pyth(feed_ids)
 
         # 3) bps → executeRebalance amount per asset kind.
+        # Synthetic targets are token units (18 dec). Adapter targets are
+        # USDC value (6 dec) — matches the post-fix AgentVault._balanceOf
+        # adapter path that now returns valueInUSDC for METH/USDY.
         abs_targets: list[tuple[str, int]] = []
         for symbol, weight_bps in weight_targets:
             asset_addr = _symbol_to_address(symbol)
@@ -80,7 +87,6 @@ def execute(agent_id: int) -> dict:
             if kind == KIND_SYNTHETIC:
                 amount = _usdc_to_synthetic_tokens(asset_addr, usdc_target)
             elif kind in (KIND_METH_ADAPTER, KIND_USDY_ADAPTER):
-                # Adapter takes USDC directly as the deposit amount.
                 amount = usdc_target
             else:
                 raise ValueError(f"Unknown asset kind for symbol {symbol}")
@@ -89,12 +95,33 @@ def execute(agent_id: int) -> dict:
         # 4) executeRebalance. proof is reserved for future ZK / signature
         # attestation — empty bytes today.
         proof = b""
+        exec_fn = agent_vault(agent.vault_address).functions.executeRebalance(
+            abs_targets, proof,
+        )
+
+        # Dry-run via eth_call to capture revert selector before the real tx.
+        # Mantle's public RPC blocks debug_traceTransaction, so this is the
+        # only way to surface the actual revert reason in BE logs.
+        # rebuild-marker: DRYRUN_V3_2026-05-27
+        import logging
+        log = logging.getLogger(__name__)
+        from app.chain.executor_wallet import address as executor_address
+        print("[rebalance] DRYRUN_V3 entering dry-run", flush=True)
         try:
-            tx_hash = send_tx(
-                agent_vault(agent.vault_address).functions.executeRebalance(
-                    abs_targets, proof,
-                )
-            )["tx_hash"]
+            exec_fn.call({"from": executor_address()})
+        except Exception as dry_err:
+            data_attr = getattr(dry_err, "data", None) or getattr(dry_err, "message", None)
+            log.warning(
+                "[rebalance] DRYRUN_V3 REVERT agent=%s data=%r err=%r",
+                agent_id, data_attr, dry_err,
+            )
+            print(f"[rebalance] DRYRUN_V3 REVERT data={data_attr} err={dry_err}", flush=True)
+            raise RuntimeError(f"DRYRUN_V3 revert: data={data_attr} err={dry_err}")
+
+        # executeRebalance touches N synthetics + adapters + Pyth — easily
+        # exceeds the default 500k gas cap on Mantle. Bump explicitly.
+        try:
+            tx_hash = send_tx(exec_fn, gas=2_000_000)["tx_hash"]
         except Exception:
             # Mandate breach possible — notify registry (reputation slash).
             try:

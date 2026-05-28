@@ -140,6 +140,27 @@ def get_recent_decisions(db: Session, agent_id: int, n: int = 5) -> list[Decisio
     return list(db.execute(stmt).scalars())
 
 
+def list_decisions_paginated(
+    db: Session,
+    agent_id: int,
+    *,
+    type_: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[list[Decision], int]:
+    """Returns (decisions, total_count_for_filter). Newest-first."""
+    from sqlalchemy import func
+    base = select(Decision).where(Decision.agent_id == agent_id)
+    count_base = select(func.count(Decision.id)).where(Decision.agent_id == agent_id)
+    if type_:
+        base = base.where(Decision.type == type_)
+        count_base = count_base.where(Decision.type == type_)
+    base = base.order_by(Decision.timestamp.desc()).limit(limit).offset(offset)
+    rows = list(db.execute(base).scalars())
+    total = db.execute(count_base).scalar_one()
+    return rows, total
+
+
 def get_latest_narrator_note(db: Session, agent_id: int) -> NarratorNote | None:
     stmt = (
         select(NarratorNote)
