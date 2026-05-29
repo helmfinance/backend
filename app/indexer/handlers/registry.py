@@ -3,11 +3,54 @@ import time
 from sqlalchemy.orm import Session
 
 from app.chain.client import founder_vault as founder_vault_contract
-from app.chain.client import get_w3, redemption_queue, registry
+from app.chain.client import get_w3, redemption_queue, registry, yield_harvester
 from app.chain.executor_wallet import send_tx
+from app.config import settings
 from app.db import models
+from web3 import Web3
 
 _LOCKUP_TO_TIER = {"instant": 0, "30d": 1, "60d": 2, "90d": 3}
+
+# Mandate symbol → yield adapter env key. Synthetic equities (sNVDA, sSPY, ...)
+# don't generate yield so they're not in this map. Treasury (USDY) and crypto
+# staking (mETH) do.
+_YIELD_SOURCE_BY_SYMBOL = {
+    "USDY": "ondo_usdy_adapter",
+    "mETH": "mantle_meth_adapter",
+    "METH": "mantle_meth_adapter",
+}
+
+
+def _setup_yield_sources(agent_id: int, mandate_dict: dict) -> None:
+    """Register yield-bearing adapter sources with YieldHarvester for an agent.
+
+    HelmRegistry.registerAgent does NOT wire YieldHarvester sources, so
+    without this bridge `harvest(agentId)` iterates an empty `_sources[]`
+    array and returns silently (no events, no yieldPool deposit). Mirrors
+    the tier-whitelist bridge above; runs via the executor wallet (which is
+    also the harvester's `executor`).
+    """
+    universe = mandate_dict.get("targetUniverse", []) or []
+    sources: list[str] = []
+    for sym in universe:
+        env_key = _YIELD_SOURCE_BY_SYMBOL.get(sym)
+        if not env_key:
+            continue
+        addr = getattr(settings, env_key, None)
+        if not addr:
+            print(f"[indexer] agent {agent_id}: {env_key} unset — skip {sym}")
+            continue
+        sources.append(Web3.to_checksum_address(addr))
+    if not sources:
+        print(
+            f"[indexer] agent {agent_id}: no yield-bearing assets in mandate "
+            f"— skip registerSource"
+        )
+        return
+    harvester = yield_harvester()
+    for src in sources:
+        send_tx(harvester.functions.registerSource(agent_id, src, b""))
+        print(f"[indexer] agent {agent_id}: registerSource({src}) ✓")
 
 
 def _setup_redemption_tiers(agent_id: int, mandate_dict: dict) -> None:
@@ -87,10 +130,11 @@ def handle_agent_registered(db: Session, event):
     blob = db.get(models.MandateBlob, mandate_hash)
     mandate_dict = blob.mandate_json if blob else {}
 
-    # Bridge before db.add: if the chain call fails, this handler raises and
+    # Bridge before db.add: if any chain call fails, this handler raises and
     # the dispatcher retries on the next indexer cycle (no DB row yet, so the
     # early-return guard above won't short-circuit).
     _setup_redemption_tiers(agent_id, mandate_dict)
+    _setup_yield_sources(agent_id, mandate_dict)
 
     now = int(time.time())
     db.add(models.Agent(
