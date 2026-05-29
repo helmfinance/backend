@@ -148,8 +148,13 @@ def handle_phase_advanced(db: Session, event):
 
 
 def handle_agent_slashed(db: Session, event):
-    # Reputation is updated by ReputationSlashed; phase by PhaseAdvanced.
-    return
+    # HelmRegistry.slash() flips phase to Slashed but does NOT emit
+    # PhaseAdvanced — only AgentSlashed. So this handler is responsible
+    # for the phase write. Reputation is updated by ReputationSlashed.
+    args = event["args"]
+    a = db.get(models.Agent, args["agentId"])
+    if a:
+        a.phase = "Slashed"
 
 
 def handle_agent_wind_down(db: Session, event):
