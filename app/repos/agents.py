@@ -50,11 +50,26 @@ def list_agents(
 
     if asset_class:
         targets = {c.value for c in asset_class}
-        rows = [a for a in rows if set(a.mandate.get("asset_classes", [])) & targets]
+        # Mandates stored on chain use camelCase (assetClasses); the legacy
+        # snake_case key is kept as a fallback for older rows in case any
+        # exist from earlier seed runs.
+        rows = [
+            a for a in rows
+            if set(
+                a.mandate.get("assetClasses")
+                or a.mandate.get("asset_classes", [])
+            ) & targets
+        ]
 
     if lockup:
         targets = {lk.value for lk in lockup}
-        rows = [a for a in rows if set(a.mandate.get("allowed_lockups", [])) & targets]
+        rows = [
+            a for a in rows
+            if set(
+                a.mandate.get("allowedLockups")
+                or a.mandate.get("allowed_lockups", [])
+            ) & targets
+        ]
 
     descending = order == "desc"
 
