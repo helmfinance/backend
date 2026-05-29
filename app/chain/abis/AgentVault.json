@@ -1061,6 +1061,24 @@
   },
   {
     "type": "function",
+    "name": "withdrawYieldTo",
+    "inputs": [
+      {
+        "name": "recipient",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "yieldHarvester",
     "inputs": [],
     "outputs": [
@@ -1356,6 +1374,31 @@
     "anonymous": false
   },
   {
+    "type": "event",
+    "name": "YieldWithdrawn",
+    "inputs": [
+      {
+        "name": "recipient",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "newYieldPool",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
     "type": "error",
     "name": "AlreadySettled",
     "inputs": []
@@ -1396,6 +1439,22 @@
     "type": "error",
     "name": "InsufficientShares",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InsufficientYieldPool",
+    "inputs": [
+      {
+        "name": "requested",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "available",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
   },
   {
     "type": "error",
