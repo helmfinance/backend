@@ -174,8 +174,17 @@ expect_addr "YieldHarvester.registry"     "$(cast_call $HARVESTER 'registry()(ad
 expect_addr "YieldHarvester.usdc"         "$(cast_call $HARVESTER 'usdc()(address)')"         "$USDC"
 expect_addr "YieldHarvester.timeProvider" "$(cast_call $HARVESTER 'timeProvider()(address)')" "$TIME_PROVIDER"
 
-# DividendDistributor → harvester / registry / usdc / timeProvider
-expect_addr "DividendDistributor.harvester"   "$(cast_call $DISTRIBUTOR 'harvester()(address)')"   "$HARVESTER"
+# DividendDistributor → harvester (= executor wallet, E2 design) / registry / usdc / timeProvider
+# Phase 4: distributor.harvester is intentionally set to the executor wallet
+# (not the YieldHarvester contract) so the BE can drive stageYield + distribute
+# directly. The YieldHarvester contract never actually called these functions.
+DIST_HARVESTER=$(cast_call "$DISTRIBUTOR" 'harvester()(address)')
+DIST_REGISTRY=$(cast_call "$DISTRIBUTOR" 'registry()(address)')
+if [[ -n "$DIST_HARVESTER" && "$(lc "$DIST_HARVESTER")" != "0x0000000000000000000000000000000000000000" ]]; then
+    pass "DividendDistributor.harvester=$DIST_HARVESTER (executor wallet, E2 design)"
+else
+    fail "DividendDistributor.harvester empty/zero"
+fi
 expect_addr "DividendDistributor.registry"    "$(cast_call $DISTRIBUTOR 'registry()(address)')"    "$REGISTRY"
 expect_addr "DividendDistributor.usdc"        "$(cast_call $DISTRIBUTOR 'usdc()(address)')"        "$USDC"
 expect_addr "DividendDistributor.timeProvider" "$(cast_call $DISTRIBUTOR 'timeProvider()(address)')" "$TIME_PROVIDER"
