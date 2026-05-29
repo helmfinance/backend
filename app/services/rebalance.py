@@ -67,7 +67,11 @@ def execute(agent_id: int) -> dict:
             fee_bps = int(platform_treasury().functions.feeRate(2).call())  # FeeKind.Rebalance = 2
         except Exception:
             fee_bps = 5  # conservative fallback matching the deployed default
-        usdc_balance = nav * (10_000 - fee_bps - 1) // 10_000  # extra 1bps cushion
+        # Carve out fee + 100 bps slippage headroom from the sizing base so
+        # step-1 trim leaves enough cash to cover step-4 fee transfer. Without
+        # this, NAV-sized targets equal NAV exactly → cash drains to 0 → next
+        # rebalance hits InsufficientCash on the fee payment.
+        usdc_balance = nav * (10_000 - fee_bps - 100) // 10_000
 
         # 2) Refresh Pyth feeds for synthetic targets BEFORE asking SyntheticAsset
         # for priceUSDC (else `getPriceUsdc` reverts with PriceStale).

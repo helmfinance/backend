@@ -42,7 +42,12 @@ DEFAULT INFERENCE (when user doesn't specify):
 - founderLockupDays: 180 (6 months)
 - subordinationThresholdBps: 5000 (50%)
 - maxSinglePositionBps: based on universe size, default 2500
-- weightConstraints: derive from user-stated targets, with ±200bps band
+- weightConstraints: derive from user-stated targets, with ±200bps band.
+  CRITICAL: weightConstraints[].asset MUST be an individual symbol from
+  targetUniverse — NEVER an asset-class name ("equity"/"treasury"/"cash").
+  Split class-level intent ("equity 60-80%") evenly across that class's
+  symbols. Ensure sum(minBps) stays well below 10000 (target ≤ 9000) so
+  the protocol's `sum(min) ≤ 10000` invariant holds with cash headroom.
 
 MARKETPLACE FLAVOR (you MUST populate these two fields):
 

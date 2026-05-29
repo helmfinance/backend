@@ -49,6 +49,71 @@ def handle_rebalanced(db: Session, event):
         nav_after=str(args["navAfter"]),
     ))
 
+    # Snapshot NAV + refresh positions so the agent detail page reflects the
+    # new portfolio mix immediately after each rebalance.
+    _snapshot_nav(db, agent.agent_id, vault_addr, agent.token_address, args["timestamp"])
+    _refresh_positions(db, agent.agent_id, vault_addr)
+
+
+def _refresh_positions(db: Session, agent_id: int, vault_addr: str):
+    """Read current vault asset holdings from chain and upsert positions rows.
+
+    Synthetic balances come from the SyntheticAsset ERC-20 path; METH/USDY
+    adapters expose balanceOfHolder + valueInUSDC for their adapter path.
+    Weight in bps is value / totalAssets.
+    """
+    from sqlalchemy import delete
+    from app.chain.client import agent_vault, contract_at
+    try:
+        vault = agent_vault(vault_addr)
+        n = int(vault.functions.assetCount().call())
+        nav_total = int(vault.functions.totalAssets().call())
+        # Wipe existing rows for a clean upsert (small set, <10 assets/agent).
+        db.execute(delete(models.Position).where(models.Position.agent_id == agent_id))
+
+        KIND_CLASS = {0: "equity", 1: "crypto", 2: "treasury"}
+        for i in range(n):
+            asset_addr, kind = vault.functions.assetAt(i).call()
+            try:
+                if kind == 0:  # SyntheticAsset
+                    sa = contract_at("SyntheticAsset", asset_addr)
+                    bal = int(sa.functions.balanceOf(vault_addr).call())
+                    price = int(sa.functions.priceUSDC().call())
+                    value = bal * price // 10**18
+                    symbol = sa.functions.symbol().call()
+                elif kind == 1:  # METH adapter
+                    ad = contract_at("MantleMETHAdapter", asset_addr)
+                    bal = int(ad.functions.balanceOfHolder(vault_addr).call())
+                    value = int(ad.functions.valueInUSDC(vault_addr).call())
+                    price = None
+                    symbol = "mETH"
+                else:  # USDY adapter
+                    ad = contract_at("OndoUSDYAdapter", asset_addr)
+                    bal = int(ad.functions.balanceOfHolder(vault_addr).call())
+                    value = int(ad.functions.valueInUSDC(vault_addr).call())
+                    price = None
+                    symbol = "USDY"
+            except Exception:
+                continue
+
+            weight_bps = (value * 10_000 // nav_total) if nav_total > 0 else 0
+            now_ts = int(time.time())
+            db.add(models.Position(
+                agent_id=agent_id,
+                asset_address=asset_addr.lower(),
+                symbol=symbol,
+                asset_class=KIND_CLASS.get(int(kind), "equity"),
+                amount=str(bal),
+                value_usdc=str(value),
+                weight_bps=weight_bps,
+                price_usdc=str(price) if price is not None else None,
+                price_updated_at=now_ts,
+                price_stale=False,
+                updated_at=now_ts,
+            ))
+    except Exception as e:
+        print(f"[indexer] _refresh_positions agent={agent_id} skipped: {e}")
+
 
 def handle_yield_deposited(db: Session, event):
     args = event["args"]

@@ -76,6 +76,35 @@ def validate_and_normalize(
             )
         mandate = mandate.model_copy(update={"weight_constraints": expanded})
 
+    # 0b. LLM occasionally hands back per-asset weightConstraints with
+    # `sum(minBps) > 10000` (mathematically impossible — every asset would
+    # need >100% of NAV to satisfy its own floor). When that happens, drop
+    # the LLM's constraints entirely and fall back to equal-weight across
+    # `targetUniverse` with a ±200bps band (same shape the FE register
+    # wizard uses as its own fallback). User can still hand-edit in
+    # Stage 2 of the register flow.
+    if mandate.weight_constraints:
+        from app.schemas import WeightConstraint
+        sum_min = sum(c.min_bps for c in mandate.weight_constraints)
+        if sum_min > 10000:
+            universe = mandate.target_universe or []
+            if universe:
+                per = 10000 // len(universe)
+                fallback = [
+                    WeightConstraint(
+                        asset=s,
+                        min_bps=max(0, per - 200),
+                        max_bps=min(10000, per + 200),
+                    )
+                    for s in universe
+                ]
+                mandate = mandate.model_copy(update={"weight_constraints": fallback})
+                warnings.append(
+                    f"LLM weight constraints had sum(minBps)={sum_min} > 10000 "
+                    f"(impossible); fell back to equal-weight ±200bps across "
+                    f"{len(universe)} symbols."
+                )
+
     # 1. Protocol-locked overrides
     if mandate.carry_bps != PROTOCOL_LOCKED_CARRY_BPS:
         warnings.append(

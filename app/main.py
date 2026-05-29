@@ -223,17 +223,64 @@ def get_agent(agent_id: int, db: Session = Depends(get_db)):
 
     cash_usdc = "0"
     yield_pool = "0"
+    live_positions: list = []
     import logging
     log = logging.getLogger(__name__)
-    log.warning("[get_agent] CASHFIX_V2 agent=%s vault=%s", agent_id, a.vault_address)
+    # rebuild-marker: LIVEPOS_V3
+    log.warning("[get_agent] LIVEPOS_V3 agent=%s", agent_id)
     try:
-        from app.chain.client import agent_vault
+        from app.chain.client import agent_vault, contract_at
         vault = agent_vault(a.vault_address)
         cash_usdc = str(vault.functions.cashUSDC().call())
         yield_pool = str(vault.functions.yieldPool().call())
-        log.warning("[get_agent] CASHFIX_V2 ok cash=%s yield=%s", cash_usdc, yield_pool)
+
+        # Pull positions live from chain so the agent detail page reflects
+        # current holdings even when the indexer hasn't refreshed the cached
+        # positions table yet (SQLite write contention, lag, etc.).
+        n = int(vault.functions.assetCount().call())
+        nav_total = int(vault.functions.totalAssets().call())
+        KIND_CLASS = {0: "equity", 1: "crypto", 2: "treasury"}
+        from app.schemas import Position as PosSchema, AssetClass
+        for i in range(n):
+            try:
+                asset_addr, kind = vault.functions.assetAt(i).call()
+                kind = int(kind)
+                if kind == 0:
+                    sa = contract_at("SyntheticAsset", asset_addr)
+                    bal = int(sa.functions.balanceOf(Web3.to_checksum_address(a.vault_address)).call())
+                    price = int(sa.functions.priceUSDC().call())
+                    value = bal * price // 10**18
+                    symbol = sa.functions.symbol().call()
+                elif kind == 1:
+                    ad = contract_at("MantleMETHAdapter", asset_addr)
+                    bal = int(ad.functions.balanceOfHolder(Web3.to_checksum_address(a.vault_address)).call())
+                    value = int(ad.functions.valueInUSDC(Web3.to_checksum_address(a.vault_address)).call())
+                    price = None
+                    symbol = "mETH"
+                else:
+                    ad = contract_at("OndoUSDYAdapter", asset_addr)
+                    bal = int(ad.functions.balanceOfHolder(Web3.to_checksum_address(a.vault_address)).call())
+                    value = int(ad.functions.valueInUSDC(Web3.to_checksum_address(a.vault_address)).call())
+                    price = None
+                    symbol = "USDY"
+                if bal == 0 and value == 0:
+                    continue
+                weight_bps = (value * 10_000 // nav_total) if nav_total > 0 else 0
+                live_positions.append(PosSchema(
+                    asset=asset_addr,
+                    symbol=symbol,
+                    asset_class=AssetClass(KIND_CLASS.get(kind, "equity")),
+                    amount=str(bal),
+                    value_usdc=str(value),
+                    weight_bps=weight_bps,
+                    price_usdc=str(price) if price is not None else None,
+                    price_updated_at=None,
+                    price_stale=False,
+                ))
+            except Exception as pe:
+                log.warning("[get_agent] agent %s position[%s] failed: %s", agent_id, i, pe)
     except Exception as e:
-        log.warning("[get_agent] CASHFIX_V2 chain read failed: %s", e)
+        log.warning("[get_agent] chain read failed agent=%s: %s", agent_id, e)
 
     detail = converters.to_agent_detail(
         a,
@@ -248,6 +295,9 @@ def get_agent(agent_id: int, db: Session = Depends(get_db)):
         cash_usdc=cash_usdc,
         yield_pool=yield_pool,
     )
+    # Override DB-derived positions with live chain values when available.
+    if live_positions:
+        detail.positions = live_positions
     detail.performance = AgentPerformance(**analytics_repo.compute_performance(db, agent_id))
     return detail
 
@@ -868,6 +918,72 @@ def admin_register_with_synthetics(agent_id: int, response: Response) -> dict:
         except Exception as e:
             results[sym] = f"err: {str(e)[:120]}"
     return {"agentId": agent_id, "vault": vault_addr, "registrations": results}
+
+
+@app.post(
+    "/admin/agents/{agent_id}/refresh-positions",
+    responses={404: {"model": ApiError}, 500: {"model": ApiError}},
+    summary="Force-refresh positions table from chain (testnet only)",
+    tags=["admin"],
+)
+def admin_refresh_positions(agent_id: int, response: Response) -> dict:
+    """Directly invokes the same _refresh_positions used by handle_rebalanced.
+    Useful when the indexer-fed refresh hasn't been picked up yet (deploy
+    cache, race, etc.).
+    """
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    from app.db.models import Agent
+    from app.indexer.handlers.vault import _refresh_positions
+    print("[admin/refresh-positions] POSV2 invoked agent=", agent_id, flush=True)
+    with SessionLocal() as db:
+        a = db.get(Agent, agent_id)
+        if not a:
+            raise HTTPException(404, detail=ApiError(
+                error=ApiErrorCode.NotFound, message=f"Agent {agent_id} not found",
+            ).model_dump(by_alias=True))
+        _refresh_positions(db, agent_id, a.vault_address)
+        db.commit()
+        from sqlalchemy import select
+        from app.db.models import Position
+        rows = list(db.execute(select(Position).where(Position.agent_id == agent_id)).scalars())
+        return {"count": len(rows), "positions": [
+            {"symbol": r.symbol, "value": r.value_usdc, "weightBps": r.weight_bps}
+            for r in rows
+        ]}
+
+
+@app.delete(
+    "/admin/agents/{agent_id}",
+    responses={404: {"model": ApiError}, 503: {"model": ApiError}},
+    summary="Delete a single agent and its child rows (testnet only)",
+    tags=["admin"],
+)
+def admin_delete_agent(agent_id: int, response: Response) -> dict:
+    """Cascading delete of one agent so the marketplace stays clean while
+    keeping the rest of the demo state intact."""
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    from sqlalchemy import delete
+    from app.db import (
+        Agent, Decision, DividendClaim, DividendEpoch, FounderVault,
+        Holder, NarratorNote, NavPoint, Position, RedemptionRequest,
+        WindDownState,
+    )
+    with SessionLocal() as db:
+        if not db.get(Agent, agent_id):
+            raise HTTPException(404, detail=ApiError(
+                error=ApiErrorCode.NotFound, message=f"Agent {agent_id} not found",
+            ).model_dump(by_alias=True))
+        for model in (
+            DividendClaim, Position, NavPoint, Decision, DividendEpoch,
+            Holder, RedemptionRequest, NarratorNote, FounderVault,
+            WindDownState,
+        ):
+            db.execute(delete(model).where(model.agent_id == agent_id))
+        db.execute(delete(Agent).where(Agent.agent_id == agent_id))
+        db.commit()
+    return {"ok": True, "deleted": agent_id}
 
 
 @app.post(
