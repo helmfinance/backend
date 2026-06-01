@@ -14,7 +14,9 @@ def get_w3() -> Web3:
             if settings.chain_id == 5003
             else settings.mantle_rpc
         )
-        _w3 = Web3(Web3.HTTPProvider(rpc))
+        # 10s timeout — without this a slow Mantle RPC node can wedge the
+        # whole BE event loop for minutes per request.
+        _w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 10}))
     return _w3
 
 

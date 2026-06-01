@@ -209,67 +209,27 @@ def list_agents(
 
 
 @memoize(10)
-def _live_vault_snapshot(vault_address: str) -> tuple[str, str, list]:
-    """Read vault cash + yield + positions from chain. ~20 RPC calls; cached
-    for 10 seconds per vault so the agent detail page stays fast under repeated
-    polling. After Rebalance/Harvest/Distribute the user can refresh again 10s
-    later to see updated state."""
+def _vault_cash_yield(vault_address: str) -> tuple[str, str]:
+    """Read vault cash + yield from chain (2 RPC calls). Memoized 10s.
+
+    Positions are NOT read here — the indexer's _refresh_positions populates
+    the Position table on every Rebalanced event, so the DB cache is the
+    authoritative source. Reading positions live would mean 4×N more RPC
+    calls per request (N = asset count, currently 6 → 24+ extra calls),
+    which made GET /agents/{id} cold-response 25-30s.
+    """
     import logging
     log = logging.getLogger(__name__)
-    cash_usdc = "0"
-    yield_pool = "0"
-    live_positions: list = []
     try:
-        from app.chain.client import agent_vault, contract_at
-        from app.schemas import Position as PosSchema, AssetClass
+        from app.chain.client import agent_vault
         vault = agent_vault(vault_address)
-        cash_usdc = str(vault.functions.cashUSDC().call())
-        yield_pool = str(vault.functions.yieldPool().call())
-        n = int(vault.functions.assetCount().call())
-        nav_total = int(vault.functions.totalAssets().call())
-        KIND_CLASS = {0: "equity", 1: "crypto", 2: "treasury"}
-        for i in range(n):
-            try:
-                asset_addr, kind = vault.functions.assetAt(i).call()
-                kind = int(kind)
-                vault_addr_cs = Web3.to_checksum_address(vault_address)
-                if kind == 0:
-                    sa = contract_at("SyntheticAsset", asset_addr)
-                    bal = int(sa.functions.balanceOf(vault_addr_cs).call())
-                    price = int(sa.functions.priceUSDC().call())
-                    value = bal * price // 10**18
-                    symbol = sa.functions.symbol().call()
-                elif kind == 1:
-                    ad = contract_at("MantleMETHAdapter", asset_addr)
-                    bal = int(ad.functions.balanceOfHolder(vault_addr_cs).call())
-                    value = int(ad.functions.valueInUSDC(vault_addr_cs).call())
-                    price = None
-                    symbol = "mETH"
-                else:
-                    ad = contract_at("OndoUSDYAdapter", asset_addr)
-                    bal = int(ad.functions.balanceOfHolder(vault_addr_cs).call())
-                    value = int(ad.functions.valueInUSDC(vault_addr_cs).call())
-                    price = None
-                    symbol = "USDY"
-                if bal == 0 and value == 0:
-                    continue
-                weight_bps = (value * 10_000 // nav_total) if nav_total > 0 else 0
-                live_positions.append(PosSchema(
-                    asset=asset_addr,
-                    symbol=symbol,
-                    asset_class=AssetClass(KIND_CLASS.get(kind, "equity")),
-                    amount=str(bal),
-                    value_usdc=str(value),
-                    weight_bps=weight_bps,
-                    price_usdc=str(price) if price is not None else None,
-                    price_updated_at=None,
-                    price_stale=False,
-                ))
-            except Exception as pe:
-                log.warning("[_live_vault_snapshot] position[%s] failed: %s", i, pe)
+        return (
+            str(vault.functions.cashUSDC().call()),
+            str(vault.functions.yieldPool().call()),
+        )
     except Exception as e:
-        log.warning("[_live_vault_snapshot] chain read failed vault=%s: %s", vault_address, e)
-    return cash_usdc, yield_pool, live_positions
+        log.warning("[_vault_cash_yield] chain read failed vault=%s: %s", vault_address, e)
+        return ("0", "0")
 
 
 @app.get(
@@ -285,8 +245,12 @@ def get_agent(agent_id: int, db: Session = Depends(get_db)):
     if a is None:
         raise _api_error(404, ApiErrorCode.NotFound, f"Agent {agent_id} not found")
 
-    cash_usdc, yield_pool, live_positions = _live_vault_snapshot(a.vault_address)
+    cash_usdc, yield_pool = _vault_cash_yield(a.vault_address)
 
+    # Positions come from the DB Position table populated by the indexer
+    # (handle_rebalanced → _refresh_positions). If a rebalance just happened
+    # and the indexer hasn't caught up yet, the DB will be a few seconds stale
+    # — accepted trade-off for sub-second response time.
     detail = converters.to_agent_detail(
         a,
         current_nav=agent_repo.get_latest_nav(db, agent_id),
@@ -300,9 +264,6 @@ def get_agent(agent_id: int, db: Session = Depends(get_db)):
         cash_usdc=cash_usdc,
         yield_pool=yield_pool,
     )
-    # Override DB-derived positions with live chain values when available.
-    if live_positions:
-        detail.positions = live_positions
     detail.performance = AgentPerformance(**analytics_repo.compute_performance(db, agent_id))
     return detail
 
