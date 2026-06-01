@@ -40,7 +40,17 @@ def _addr(raw) -> str:
 
 
 def _credit(db: Session, agent_id: int, holder_addr: str, delta: int) -> None:
-    """Apply ``delta`` (positive = inbound, negative = outbound) to Holder."""
+    """Apply ``delta`` (positive = inbound, negative = outbound) to Holder.
+
+    The INSERT path uses dialect ON CONFLICT DO NOTHING because two indexer
+    cycles (APScheduler tick + an HTTP-triggered debug tick) can race and
+    both attempt to seed the same (agent_id, holder_addr); the loser would
+    otherwise abort the entire chunk on commit. The UPDATE path is safe to
+    re-run because the second writer recomputes balance from the persisted
+    row.
+    """
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
     h = db.get(models.Holder, (agent_id, holder_addr))
     now = int(time.time())
     if h:
@@ -49,19 +59,19 @@ def _credit(db: Session, agent_id: int, holder_addr: str, delta: int) -> None:
             new_bal = 0  # defensive — should never happen if events are ordered
         h.balance = str(new_bal)
         return
-    db.add(models.Holder(
+
+    stmt = sqlite_insert(models.Holder).values(
         agent_id=agent_id,
         address=holder_addr,
         balance=str(max(delta, 0)),
         weight_bps=0,
         first_held_at=now,
         cumulative_dividends_claimed_usdc="0",
-    ))
-    # SessionLocal is autoflush=False, so the next Transfer event for the
-    # same (agent_id, holder_addr) within this same chunk would not see this
-    # pending INSERT via db.get() and would add a duplicate — UNIQUE
-    # constraint then aborts the entire chunk on commit. Flushing here keeps
-    # the identity map aligned so consecutive events coalesce.
+    ).on_conflict_do_nothing(index_elements=["agent_id", "address"])
+    db.execute(stmt)
+    # autoflush=False: the next event in this chunk that touches the same
+    # holder would still see None via db.get() unless we flush. The flush
+    # itself can't conflict because the INSERT above is OR-IGNORE.
     db.flush()
 
 

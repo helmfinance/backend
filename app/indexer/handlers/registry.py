@@ -145,7 +145,14 @@ def handle_agent_registered(db: Session, event):
     _setup_yield_sources(agent_id, mandate_dict)
 
     now = int(time.time())
-    db.add(models.Agent(
+    # APScheduler tick + an HTTP-triggered /admin/debug/indexer-tick can race
+    # and both INSERT the same agent_id. SQLite has no ON CONFLICT in the ORM
+    # path, so we use the dialect insert helper to make the write idempotent
+    # at the SQL layer rather than at the in-session db.get() layer (which
+    # the second concurrent session bypasses because the first hasn't
+    # committed yet).
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    stmt = sqlite_insert(models.Agent).values(
         agent_id=agent_id,
         name=mandate_dict.get("name", f"Agent #{agent_id}"),
         ticker=mandate_dict.get("ticker", "AGT"),
@@ -161,7 +168,8 @@ def handle_agent_registered(db: Session, event):
         mandate_hash=mandate_hash,
         reputation=10000,
         created_at=now,
-    ))
+    ).on_conflict_do_nothing(index_elements=["agent_id"])
+    db.execute(stmt)
 
     # Seed a FounderVault row at the same time so the /agents/{id} and
     # /portfolio responses don't return null for the founder lifecycle UI.
@@ -173,7 +181,7 @@ def handle_agent_registered(db: Session, event):
         lockup_ends_at = int(fv.functions.lockupEndsAt().call())
         carry_balance = int(fv.functions.carryBalance().call())
         is_sub_active = bool(fv.functions.isSubordinationActive().call())
-        db.add(models.FounderVault(
+        fv_stmt = sqlite_insert(models.FounderVault).values(
             agent_id=agent_id,
             address=fv_addr.lower(),
             shares_held=str(shares_held),
@@ -181,7 +189,8 @@ def handle_agent_registered(db: Session, event):
             cumulative_withdrawn_bps=0,
             is_subordination_active=is_sub_active,
             carry_balance_usdc=str(carry_balance),
-        ))
+        ).on_conflict_do_nothing(index_elements=["agent_id"])
+        db.execute(fv_stmt)
     except Exception as e:
         # Don't block agent indexing on FounderVault read failure — founder
         # event handlers will fill it in later.
