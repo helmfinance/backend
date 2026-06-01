@@ -1552,7 +1552,11 @@ def system_health():
 )
 def health(response: Response) -> dict:
     """Lightweight probe — DB SELECT 1 must succeed (HTTP 503 otherwise);
-    chain RPC reachability is reported but non-fatal."""
+    chain RPC reachability is reported but non-fatal.
+
+    build-marker: MEMOIZE_V1 — bumps on each cache-related deploy so we can
+    verify Railway has picked up the latest code without server logs.
+    """
     response.headers["Cache-Control"] = "no-store"
     from sqlalchemy import text
 
@@ -1569,4 +1573,4 @@ def health(response: Response) -> dict:
     except Exception:
         chain_ok = False
 
-    return {"ok": True, "db": True, "chain": chain_ok}
+    return {"ok": True, "db": True, "chain": chain_ok, "build": "MEMOIZE_V1"}
