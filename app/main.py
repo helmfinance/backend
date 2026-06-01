@@ -896,12 +896,29 @@ def admin_refresh_positions(agent_id: int, response: Response) -> dict:
     """Directly invokes the same _refresh_positions used by handle_rebalanced.
     Useful when the indexer-fed refresh hasn't been picked up yet (deploy
     cache, race, etc.).
+
+    Pre-step: refresh all Pyth feeds the vault touches (synthetics + ETH/USD
+    + USDC/USD). vault.totalAssets() — read inside _refresh_positions —
+    reverts on stale feeds when their on-chain publishTime is older than 60s,
+    independent of TimeProvider state. Refresh tx confirms before the view
+    read so the read sees fresh prices.
     """
     response.headers["Cache-Control"] = "no-store"
     _check_testnet()
     from app.db.models import Agent
     from app.indexer.handlers.vault import _refresh_positions
-    print("[admin/refresh-positions] POSV2 invoked agent=", agent_id, flush=True)
+    from app.services.rebalance import (
+        _collect_all_synthetic_feed_ids, _refresh_pyth,
+    )
+    print("[admin/refresh-positions] POSV3 invoked agent=", agent_id, flush=True)
+    try:
+        feed_ids = _collect_all_synthetic_feed_ids()
+        if feed_ids:
+            _refresh_pyth(feed_ids)
+    except Exception as e:
+        # Non-fatal — if Pyth refresh fails we still try the chain read so the
+        # caller sees the underlying revert reason instead of a generic 500.
+        print(f"[admin/refresh-positions] Pyth refresh failed: {e}", flush=True)
     with SessionLocal() as db:
         a = db.get(Agent, agent_id)
         if not a:
