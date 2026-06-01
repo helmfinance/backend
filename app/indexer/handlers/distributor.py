@@ -82,13 +82,15 @@ def handle_distributed(db: Session, event) -> None:
             pending = bal * holders_share // total_shares_snapshot
             if pending == 0:
                 continue
-            key = (agent_id, epoch, h.holder_address)
+            # Holder uses .address (col name); DividendClaim uses
+            # .holder_address. Same field, different schemas.
+            key = (agent_id, epoch, h.address)
             if db.get(models.DividendClaim, key):
                 continue
             db.add(models.DividendClaim(
                 agent_id=agent_id,
                 epoch=epoch,
-                holder_address=h.holder_address,
+                holder_address=h.address,
                 amount_usdc=str(pending),
                 claimed=False,
                 claimed_at=None,

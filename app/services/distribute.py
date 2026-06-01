@@ -112,12 +112,15 @@ def run(agent_id: int) -> dict:
                         pending = bal * holders_share // total_shares_snapshot
                         if pending == 0:
                             continue
-                        key = (agent_id, epoch, h.holder_address)
+                        # Holder.address is the column name; DividendClaim
+                        # uses .holder_address. Mixing them up silently
+                        # raised AttributeError and lost the whole epoch.
+                        key = (agent_id, epoch, h.address)
                         if db.get(models.DividendClaim, key):
                             continue
                         db.add(models.DividendClaim(
                             agent_id=agent_id, epoch=epoch,
-                            holder_address=h.holder_address,
+                            holder_address=h.address,
                             amount_usdc=str(pending),
                             claimed=False, claimed_at=None,
                         ))

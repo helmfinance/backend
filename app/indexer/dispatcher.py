@@ -6,6 +6,7 @@ from app.chain.client import (
     redemption_queue,
     registry,
 )
+from app.indexer.handlers import agent_token as agent_token_h
 from app.indexer.handlers import distributor as distributor_h
 from app.indexer.handlers import founder as founder_h
 from app.indexer.handlers import nft as nft_h
@@ -26,6 +27,14 @@ VAULT_EVENTS = {
     "YieldDeposited": vault_h.handle_yield_deposited,
     "Deposit":        vault_h.handle_deposit,
     "Withdraw":       vault_h.handle_withdraw,
+}
+
+# AgentToken (ERC-20) — Transfer is the authoritative signal for share
+# custody. vault.Deposit's "owner" is the public-mint entrypoint contract on
+# the launch path, NOT the end-user wallet, so we cannot use Deposit alone
+# to populate Holder rows that DividendDistributor seeding relies on.
+TOKEN_EVENTS = {
+    "Transfer": agent_token_h.handle_transfer,
 }
 
 NFT_EVENTS = {
@@ -94,6 +103,13 @@ def process_range(db, start_block: int, end_block: int):
             abi=load_abi("FounderVault"),
         )
         _process_contract_events(db, c_fv, FOUNDER_EVENTS, start_block, end_block)
+
+        if a.token_address:
+            c_tok = w3.eth.contract(
+                address=w3.to_checksum_address(a.token_address),
+                abi=load_abi("AgentToken"),
+            )
+            _process_contract_events(db, c_tok, TOKEN_EVENTS, start_block, end_block)
 
 
 def _process_contract_events(db, contract, event_map: dict, start: int, end: int):

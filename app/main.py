@@ -919,6 +919,83 @@ def admin_refresh_positions(agent_id: int, response: Response) -> dict:
         ]}
 
 
+@app.post(
+    "/admin/agents/{agent_id}/backfill-holders",
+    responses={404: {"model": ApiError}, 500: {"model": ApiError}},
+    summary="Rebuild Holder table from AgentToken Transfer logs (testnet only)",
+    tags=["admin"],
+)
+def admin_backfill_holders(agent_id: int, response: Response) -> dict:
+    """One-shot replay of AgentToken Transfer events to populate Holder rows.
+
+    Needed for agents registered before TOKEN_EVENTS indexing existed, and as
+    a safety net when the indexer chunk that covered a deposit was lost (DB
+    wipe between deploys, etc.). Idempotent: existing Holder balances are
+    overwritten by the cumulative event-replay total.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+
+    from sqlalchemy import delete
+    from app.chain.abi_loader import load_abi
+    from app.chain.client import get_w3
+    from app.db.models import Agent, Holder
+    from app.indexer.handlers.agent_token import handle_transfer
+    from app.indexer.listener import BOOTSTRAP_BLOCK
+
+    with SessionLocal() as db:
+        agent = db.get(Agent, agent_id)
+        if not agent or not agent.token_address:
+            raise HTTPException(404, detail=ApiError(
+                error=ApiErrorCode.NotFound,
+                message=f"Agent {agent_id} not found or has no token_address",
+            ).model_dump(by_alias=True))
+
+        # Wipe existing rows for this agent — replay rebuilds the full balance
+        # set, so any stale rows from the prior (entrypoint-as-owner) bug must
+        # not linger.
+        db.execute(delete(Holder).where(Holder.agent_id == agent_id))
+        db.flush()
+
+        w3 = get_w3()
+        token_c = w3.eth.contract(
+            address=w3.to_checksum_address(agent.token_address),
+            abi=load_abi("AgentToken"),
+        )
+        head = w3.eth.block_number
+        cur = BOOTSTRAP_BLOCK
+        # Match indexer chunk size to stay under Mantle's eth_getLogs window.
+        CHUNK = settings.indexer_chunk_blocks
+        total_events = 0
+        while cur <= head:
+            chunk_end = min(cur + CHUNK - 1, head)
+            try:
+                logs = token_c.events.Transfer.get_logs(
+                    from_block=cur, to_block=chunk_end,
+                )
+                for log in logs:
+                    handle_transfer(db, log)
+                    total_events += 1
+            except Exception as e:
+                # Surface but don't abort — partial backfill is still useful.
+                print(f"[backfill] chunk {cur}-{chunk_end} failed: {e}")
+            cur = chunk_end + 1
+
+        db.commit()
+
+        from sqlalchemy import select
+        rows = list(
+            db.execute(select(Holder).where(Holder.agent_id == agent_id)).scalars()
+        )
+        return {
+            "agentId": agent_id,
+            "transferEventsApplied": total_events,
+            "holders": [
+                {"address": h.address, "balance": h.balance} for h in rows
+            ],
+        }
+
+
 @app.delete(
     "/admin/agents/{agent_id}",
     responses={404: {"model": ApiError}, 503: {"model": ApiError}},
