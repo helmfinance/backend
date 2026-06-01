@@ -920,6 +920,54 @@ def admin_refresh_positions(agent_id: int, response: Response) -> dict:
 
 
 @app.post(
+    "/admin/agents/{agent_id}/setup-yield-sources",
+    responses={404: {"model": ApiError}, 500: {"model": ApiError}},
+    summary="Register USDY + mETH adapters as YieldHarvester sources (testnet only)",
+    tags=["admin"],
+)
+def admin_setup_yield_sources(agent_id: int, response: Response) -> dict:
+    """Force-register the standard yield-bearing adapters with YieldHarvester
+    for an agent. Idempotent at the contract level (registerSource emits no
+    duplicate event for the same source).
+
+    Needed when the agent was registered before the auto-wire was added or
+    when the BE didn't have the mandate body in MandateBlob at register time
+    (e.g. after a DB wipe), causing _setup_yield_sources to no-op.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    from web3 import Web3
+    from app.chain.client import yield_harvester
+    from app.chain.executor_wallet import send_tx
+    from app.db.models import Agent
+
+    with SessionLocal() as db:
+        if not db.get(Agent, agent_id):
+            raise HTTPException(404, detail=ApiError(
+                error=ApiErrorCode.NotFound,
+                message=f"Agent {agent_id} not found",
+            ).model_dump(by_alias=True))
+
+    harvester = yield_harvester()
+    results: dict[str, str] = {}
+    for env_key in ("ondo_usdy_adapter", "mantle_meth_adapter"):
+        addr = getattr(settings, env_key, "")
+        if not addr:
+            results[env_key] = "env unset"
+            continue
+        try:
+            cs = Web3.to_checksum_address(addr)
+            tx = send_tx(
+                harvester.functions.registerSource(agent_id, cs, b""),
+            )["tx_hash"]
+            results[env_key] = tx
+        except Exception as e:
+            # Likely already registered — surface but don't fail
+            results[env_key] = f"err: {str(e)[:120]}"
+    return {"agentId": agent_id, "sources": results}
+
+
+@app.post(
     "/admin/agents/{agent_id}/backfill-holders",
     responses={404: {"model": ApiError}, 500: {"model": ApiError}},
     summary="Rebuild Holder table from AgentToken Transfer logs (testnet only)",
