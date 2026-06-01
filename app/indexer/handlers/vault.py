@@ -63,9 +63,13 @@ def _refresh_positions(db: Session, agent_id: int, vault_addr: str):
     Weight in bps is value / totalAssets.
     """
     from sqlalchemy import delete
+    from web3 import Web3
     from app.chain.client import agent_vault, contract_at
     try:
-        vault = agent_vault(vault_addr)
+        # Web3 calls reject lowercase addresses (require EIP-55 checksum).
+        # vault_addr coming from DB is lowercase, so normalise once.
+        vault_cs = Web3.to_checksum_address(vault_addr)
+        vault = agent_vault(vault_cs)
         n = int(vault.functions.assetCount().call())
         nav_total = int(vault.functions.totalAssets().call())
         # Wipe existing rows for a clean upsert (small set, <10 assets/agent).
@@ -77,23 +81,24 @@ def _refresh_positions(db: Session, agent_id: int, vault_addr: str):
             try:
                 if kind == 0:  # SyntheticAsset
                     sa = contract_at("SyntheticAsset", asset_addr)
-                    bal = int(sa.functions.balanceOf(vault_addr).call())
+                    bal = int(sa.functions.balanceOf(vault_cs).call())
                     price = int(sa.functions.priceUSDC().call())
                     value = bal * price // 10**18
                     symbol = sa.functions.symbol().call()
                 elif kind == 1:  # METH adapter
                     ad = contract_at("MantleMETHAdapter", asset_addr)
-                    bal = int(ad.functions.balanceOfHolder(vault_addr).call())
-                    value = int(ad.functions.valueInUSDC(vault_addr).call())
+                    bal = int(ad.functions.balanceOfHolder(vault_cs).call())
+                    value = int(ad.functions.valueInUSDC(vault_cs).call())
                     price = None
                     symbol = "mETH"
                 else:  # USDY adapter
                     ad = contract_at("OndoUSDYAdapter", asset_addr)
-                    bal = int(ad.functions.balanceOfHolder(vault_addr).call())
-                    value = int(ad.functions.valueInUSDC(vault_addr).call())
+                    bal = int(ad.functions.balanceOfHolder(vault_cs).call())
+                    value = int(ad.functions.valueInUSDC(vault_cs).call())
                     price = None
                     symbol = "USDY"
-            except Exception:
+            except Exception as pe:
+                print(f"[indexer] _refresh_positions asset[{i}] failed: {pe}")
                 continue
 
             weight_bps = (value * 10_000 // nav_total) if nav_total > 0 else 0
