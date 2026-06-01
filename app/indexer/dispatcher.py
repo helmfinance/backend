@@ -67,6 +67,14 @@ def process_range(db, start_block: int, end_block: int):
     #    that are still active. Skip:
     #      * seed agents (agent_id >= 9000) — stub vault addresses, never emit.
     #      * Settled agents — fully wound down, no rebalance/yield activity.
+    #
+    # IMPORTANT: SessionLocal is configured with autoflush=False, so the Agent
+    # rows added by handle_agent_registered in step (1) above are still pending
+    # in the session and NOT visible to this query. Without an explicit flush,
+    # the very first Deposit event for a brand-new agent (founder seed mint
+    # fired within the same registerAgent tx) is silently skipped — the agent's
+    # vault address isn't yet in the result set we iterate.
+    db.flush()
     from app.db.models import Agent
     vaults = (
         db.query(Agent)
