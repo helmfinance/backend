@@ -142,9 +142,7 @@ def execute(agent_id: int) -> dict:
         # web3 call inside the loop (outer except swallows it); calling here
         # in a fresh session with explicit commit makes the update reliable.
         try:
-            from app.db.session import SessionLocal
-            from app.indexer.handlers.vault import _refresh_positions
-            from app.indexer.handlers.vault import _snapshot_nav
+            from app.indexer.handlers.vault import _refresh_positions, _snapshot_nav
             import time as _t
             with SessionLocal() as fresh_db:
                 agent_fresh = fresh_db.get(models.Agent, agent_id)
