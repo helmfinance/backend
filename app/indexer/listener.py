@@ -9,11 +9,12 @@ from app.indexer.state import get_last_synced, set_last_synced
 CONFIRMATIONS = 6
 CHUNK_SIZE = settings.indexer_chunk_blocks
 
-# Phase 5 contracts were deployed around block 39,260,530 on Mantle Sepolia.
-# When the BE DB is wiped (Railway redeploy without persistent volume), the
-# indexer must replay history from the deploy block — otherwise every existing
-# agent on chain becomes invisible to the BE forever.
-BOOTSTRAP_BLOCK = 39_260_530
+# Phase 5 contracts deployed at block 39,260,530. For the hackathon demo we
+# anchor near the most recent register event so a DB wipe replay is fast
+# (~hundreds of blocks vs ~120k from deploy). Orphan agents from pre-anchor
+# blocks are intentionally left behind. Bump this number when registering a
+# new "demo agent" on a fresh chain state.
+BOOTSTRAP_BLOCK = 39_382_900
 
 
 def run_one_cycle():
