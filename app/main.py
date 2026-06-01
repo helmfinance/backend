@@ -66,7 +66,7 @@ from app.services import condition_evaluator
 from app.services import distribute, harvest, nft_metadata, qualification, rebalance
 from web3 import Web3
 from app.utils.addresses import addr_or_zero
-from app.utils.cache import cache_for
+from app.utils.cache import cache_for, memoize
 
 
 _AUTO_GRANULARITY: dict[NavPeriod, NavGranularity] = {
@@ -208,59 +208,47 @@ def list_agents(
     return Page[AgentSummary](items=items, total=total, limit=limit, offset=offset)
 
 
-@app.get(
-    "/agents/{agent_id}",
-    response_model=AgentDetail,
-    responses={404: {"model": ApiError}},
-    dependencies=[Depends(cache_for(10))],
-    summary="Agent detail",
-    tags=["agents"],
-)
-def get_agent(agent_id: int, db: Session = Depends(get_db)):
-    a = agent_repo.get_agent(db, agent_id)
-    if a is None:
-        raise _api_error(404, ApiErrorCode.NotFound, f"Agent {agent_id} not found")
-
+@memoize(10)
+def _live_vault_snapshot(vault_address: str) -> tuple[str, str, list]:
+    """Read vault cash + yield + positions from chain. ~20 RPC calls; cached
+    for 10 seconds per vault so the agent detail page stays fast under repeated
+    polling. After Rebalance/Harvest/Distribute the user can refresh again 10s
+    later to see updated state."""
+    import logging
+    log = logging.getLogger(__name__)
     cash_usdc = "0"
     yield_pool = "0"
     live_positions: list = []
-    import logging
-    log = logging.getLogger(__name__)
-    # rebuild-marker: LIVEPOS_V3
-    log.warning("[get_agent] LIVEPOS_V3 agent=%s", agent_id)
     try:
         from app.chain.client import agent_vault, contract_at
-        vault = agent_vault(a.vault_address)
+        from app.schemas import Position as PosSchema, AssetClass
+        vault = agent_vault(vault_address)
         cash_usdc = str(vault.functions.cashUSDC().call())
         yield_pool = str(vault.functions.yieldPool().call())
-
-        # Pull positions live from chain so the agent detail page reflects
-        # current holdings even when the indexer hasn't refreshed the cached
-        # positions table yet (SQLite write contention, lag, etc.).
         n = int(vault.functions.assetCount().call())
         nav_total = int(vault.functions.totalAssets().call())
         KIND_CLASS = {0: "equity", 1: "crypto", 2: "treasury"}
-        from app.schemas import Position as PosSchema, AssetClass
         for i in range(n):
             try:
                 asset_addr, kind = vault.functions.assetAt(i).call()
                 kind = int(kind)
+                vault_addr_cs = Web3.to_checksum_address(vault_address)
                 if kind == 0:
                     sa = contract_at("SyntheticAsset", asset_addr)
-                    bal = int(sa.functions.balanceOf(Web3.to_checksum_address(a.vault_address)).call())
+                    bal = int(sa.functions.balanceOf(vault_addr_cs).call())
                     price = int(sa.functions.priceUSDC().call())
                     value = bal * price // 10**18
                     symbol = sa.functions.symbol().call()
                 elif kind == 1:
                     ad = contract_at("MantleMETHAdapter", asset_addr)
-                    bal = int(ad.functions.balanceOfHolder(Web3.to_checksum_address(a.vault_address)).call())
-                    value = int(ad.functions.valueInUSDC(Web3.to_checksum_address(a.vault_address)).call())
+                    bal = int(ad.functions.balanceOfHolder(vault_addr_cs).call())
+                    value = int(ad.functions.valueInUSDC(vault_addr_cs).call())
                     price = None
                     symbol = "mETH"
                 else:
                     ad = contract_at("OndoUSDYAdapter", asset_addr)
-                    bal = int(ad.functions.balanceOfHolder(Web3.to_checksum_address(a.vault_address)).call())
-                    value = int(ad.functions.valueInUSDC(Web3.to_checksum_address(a.vault_address)).call())
+                    bal = int(ad.functions.balanceOfHolder(vault_addr_cs).call())
+                    value = int(ad.functions.valueInUSDC(vault_addr_cs).call())
                     price = None
                     symbol = "USDY"
                 if bal == 0 and value == 0:
@@ -278,9 +266,26 @@ def get_agent(agent_id: int, db: Session = Depends(get_db)):
                     price_stale=False,
                 ))
             except Exception as pe:
-                log.warning("[get_agent] agent %s position[%s] failed: %s", agent_id, i, pe)
+                log.warning("[_live_vault_snapshot] position[%s] failed: %s", i, pe)
     except Exception as e:
-        log.warning("[get_agent] chain read failed agent=%s: %s", agent_id, e)
+        log.warning("[_live_vault_snapshot] chain read failed vault=%s: %s", vault_address, e)
+    return cash_usdc, yield_pool, live_positions
+
+
+@app.get(
+    "/agents/{agent_id}",
+    response_model=AgentDetail,
+    responses={404: {"model": ApiError}},
+    dependencies=[Depends(cache_for(10))],
+    summary="Agent detail",
+    tags=["agents"],
+)
+def get_agent(agent_id: int, db: Session = Depends(get_db)):
+    a = agent_repo.get_agent(db, agent_id)
+    if a is None:
+        raise _api_error(404, ApiErrorCode.NotFound, f"Agent {agent_id} not found")
+
+    cash_usdc, yield_pool, live_positions = _live_vault_snapshot(a.vault_address)
 
     detail = converters.to_agent_detail(
         a,
