@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import time
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import models
@@ -34,6 +35,23 @@ def handle_distributed(db: Session, event) -> None:
     carry_share = int(args["carryShare"])
     now = int(time.time())
 
+    # Snapshot total supply at this block — the on-chain DividendDistributor
+    # records totalSharesAtSnapshot in its EpochData; we replicate it in the BE
+    # so claim-amount math works without a chain round-trip from the portfolio
+    # endpoint.
+    total_shares_snapshot = 0
+    try:
+        from app.chain.client import agent_token, get_w3
+        agent = db.get(models.Agent, agent_id)
+        if agent and agent.token_address:
+            total_shares_snapshot = int(
+                agent_token(agent.token_address)
+                .functions.totalSupply()
+                .call(block_identifier=int(event["blockNumber"]))
+            )
+    except Exception as e:
+        print(f"[indexer] handle_distributed snapshot supply read failed: {e}")
+
     db.add(models.DividendEpoch(
         agent_id=agent_id,
         epoch=epoch,
@@ -41,8 +59,40 @@ def handle_distributed(db: Session, event) -> None:
         holders_share_usdc=str(holders_share),
         carry_share_usdc=str(carry_share),
         distributed_at=now,
-        total_shares_at_snapshot="0",  # snapshot root carries Merkle commitment; supply unknown
+        total_shares_at_snapshot=str(total_shares_snapshot),
     ))
+
+    # Seed pending DividendClaim rows for every known holder so the portfolio
+    # endpoint can surface "claimable" without re-reading the chain on every
+    # request. Amount per holder = balance × holders_share / total_supply.
+    # `claimed=False` flips to True when Claimed event fires (handle_claimed).
+    if total_shares_snapshot > 0:
+        holders = list(
+            db.execute(
+                select(models.Holder).where(models.Holder.agent_id == agent_id)
+            ).scalars()
+        )
+        for h in holders:
+            try:
+                bal = int(h.balance or 0)
+            except (TypeError, ValueError):
+                bal = 0
+            if bal == 0:
+                continue
+            pending = bal * holders_share // total_shares_snapshot
+            if pending == 0:
+                continue
+            key = (agent_id, epoch, h.holder_address)
+            if db.get(models.DividendClaim, key):
+                continue
+            db.add(models.DividendClaim(
+                agent_id=agent_id,
+                epoch=epoch,
+                holder_address=h.holder_address,
+                amount_usdc=str(pending),
+                claimed=False,
+                claimed_at=None,
+            ))
 
     # Mirror as a Decision row for the agent's decision log
     tx_hash = _tx_hash(event)
