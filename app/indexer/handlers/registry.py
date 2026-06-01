@@ -119,13 +119,21 @@ def handle_agent_registered(db: Session, event):
             mandate_uri = params.get("mandateURI") or params.get("mandateUri") or ""
     except Exception as e:
         print(f"[indexer] decode calldata failed for tx {tx_hash}: {e}")
-        return
+        # Fall through — register the Agent with a placeholder mandate_hash
+        # so the demo flow (mint / rebalance / distribute / claim) still
+        # works without a real mandate body. mandate-dependent features
+        # (LLM narrator, tier whitelist) will no-op until a body is
+        # supplied via /agents/{id}/mandate/import.
 
+    # Fallback: synthesize a unique mandate_hash from the tx hash so the
+    # Agent row's UNIQUE constraint on mandate_hash is satisfied and the
+    # row gets created even if calldata decoding failed.
     if not mandate_hash:
+        mandate_hash = "0x" + ("00" * 16) + tx_hash.replace("0x", "")[:32]
         print(
-            f"[indexer] no mandateHash in calldata for agent {agent_id} — skipping",
+            f"[indexer] agent {agent_id}: no mandateHash in calldata — "
+            f"using synthetic {mandate_hash}",
         )
-        return
 
     blob = db.get(models.MandateBlob, mandate_hash)
     mandate_dict = blob.mandate_json if blob else {}
