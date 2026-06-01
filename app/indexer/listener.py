@@ -9,6 +9,12 @@ from app.indexer.state import get_last_synced, set_last_synced
 CONFIRMATIONS = 6
 CHUNK_SIZE = settings.indexer_chunk_blocks
 
+# Phase 5 contracts were deployed around block 39,260,530 on Mantle Sepolia.
+# When the BE DB is wiped (Railway redeploy without persistent volume), the
+# indexer must replay history from the deploy block — otherwise every existing
+# agent on chain becomes invisible to the BE forever.
+BOOTSTRAP_BLOCK = 39_260_530
+
 
 def run_one_cycle():
     """Process from last_synced+1 to (current - confirmations)."""
@@ -23,8 +29,10 @@ def run_one_cycle():
     with SessionLocal() as db:
         last = get_last_synced(db)
         if last == 0:
-            # First run — anchor near head; full history backfill is a separate task
-            last = safe - 100
+            # Bootstrap from contract-deploy block so a DB wipe doesn't orphan
+            # every previously-registered agent. ~115k blocks to catch up at
+            # first deploy; CHUNK_SIZE controls the per-cycle slice.
+            last = BOOTSTRAP_BLOCK - 1
         start = last + 1
         if start > safe:
             return  # nothing to do
