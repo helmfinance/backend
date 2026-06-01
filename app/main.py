@@ -1235,6 +1235,50 @@ def admin_nft_metadata(agent_id: int, response: Response) -> AdminNftMetadataRes
 _PHASE_NAMES = ["Incubation", "PublicLaunch", "WindDown", "Slashed", "Settled"]
 
 
+@app.post(
+    "/admin/debug/indexer-tick",
+    summary="Process one chunk directly, surface any swallowed exception",
+    tags=["admin"],
+)
+def debug_indexer_tick(response: Response) -> dict:
+    """Bypass APScheduler + the per-chunk try/except in run_one_cycle so any
+    failure surfaces in the HTTP response. Mirrors the same start/end block
+    logic the scheduler would have used.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    import traceback
+    from app.chain.client import get_w3
+    from app.indexer.dispatcher import process_range
+    from app.indexer.listener import BOOTSTRAP_BLOCK, CHUNK_SIZE, CONFIRMATIONS
+    from app.indexer.state import get_last_synced, set_last_synced
+
+    try:
+        w3 = get_w3()
+        head = w3.eth.block_number
+        safe = head - CONFIRMATIONS
+        with SessionLocal() as db:
+            last = get_last_synced(db)
+            if last == 0:
+                last = BOOTSTRAP_BLOCK - 1
+            start = last + 1
+            if start > safe:
+                return {"ok": True, "note": "nothing to do",
+                        "start": start, "safe": safe}
+            chunk_end = min(start + CHUNK_SIZE - 1, safe)
+            process_range(db, start, chunk_end)
+            set_last_synced(db, chunk_end)
+            db.commit()
+            return {"ok": True, "processed": [start, chunk_end],
+                    "new_last_synced": chunk_end}
+    except Exception as e:  # noqa: BLE001
+        return {
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+            "traceback": traceback.format_exc(),
+        }
+
+
 @app.get(
     "/admin/debug/indexer-state",
     summary="Indexer sync state vs current chain head",
