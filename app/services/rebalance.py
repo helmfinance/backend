@@ -210,17 +210,23 @@ def _collect_feed_ids(weight_targets: list[tuple[str, int]]) -> list[str]:
 
 
 def _collect_all_synthetic_feed_ids() -> list[str]:
-    """Return pythFeedId for every deployed SyntheticAsset (sNVDA, sSPY,
-    sAAPL, sTSLA, sMSFT), independent of the calling agent's mandate.
+    """Return pythFeedIds that AgentVault.executeRebalance touches across
+    the system-wide asset universe, independent of the calling agent's
+    mandate.
 
-    AgentVault.executeRebalance touches the system-wide synthetic registry
-    during invariant checks; any deployed synthetic with a stale Pyth feed
-    can revert a rebalance even if it isn't in the current agent's targets.
-    Refreshing the full set is the smallest defensive change that keeps the
-    rebalance robust against staleness on neighbors.
+    Includes:
+      * Every deployed SyntheticAsset (sNVDA, sSPY, sAAPL, sTSLA, sMSFT) —
+        any stale feed reverts the entire rebalance via Pyth's staleness
+        check during invariant computation.
+      * ETH/USD — the mETH adapter values its stake via this feed. Even when
+        the current agent doesn't hold mETH, the adapter's internal price
+        path is touched and reverts on staleness (this is the feed the
+        recent demo runs were hitting: 0xff61491a... is ETH/USD, not sSPY).
+      * USDC/USD — symmetrically used for stablecoin valuation paths.
     """
     from app.config import settings
     feed_ids: list[str] = []
+
     for env_key in ("snvda", "sspy", "saapl", "stsla", "smsft"):
         addr = getattr(settings, env_key, None)
         if not addr:
@@ -232,6 +238,14 @@ def _collect_all_synthetic_feed_ids() -> list[str]:
             feed_ids.append("0x" + fid.hex())
         except Exception:
             continue
+
+    # Non-synthetic feeds the adapters depend on. Pulled from envvars rather
+    # than chain reads because adapters don't expose their feed ids.
+    for env_key in ("pyth_feed_eth_usd", "pyth_feed_usdc_usd"):
+        fid = getattr(settings, env_key, "")
+        if fid:
+            feed_ids.append(fid if fid.startswith("0x") else "0x" + fid)
+
     return feed_ids
 
 
