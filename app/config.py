@@ -89,11 +89,12 @@ class Settings(BaseSettings):
     # for the current agent set; if the active count grows past ~30 agents,
     # split vault polling onto its own scheduler job.
     indexer_poll_seconds: int = 15
-    # 2000 blocks per chunk: Mantle RPC allows up to 10000, but smaller chunks
-    # mean faster failure recovery during initial backfill. 2000 is a safe
-    # balance — initial 115k-block bootstrap takes ~60 cycles (~5 min) instead
-    # of 580 (~30 min) at the old 200.
-    indexer_chunk_blocks: int = 2000
+    # 500 blocks per chunk: 2000 hit Mantle Sepolia RPC limits intermittently
+    # (eth_getLogs per contract × 5 contracts × per-vault loop). 500 is the
+    # sweet spot — backfill still completes in ~5min (with chunk_size × 5
+    # contracts of parallel logs per cycle) and avoids the stuck-scheduler
+    # state we saw at 2000.
+    indexer_chunk_blocks: int = 500
 
     # --- Protocol constants (env, not on-chain reads) ---
     mint_fee_bps: int = 50
