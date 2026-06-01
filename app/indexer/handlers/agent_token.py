@@ -48,15 +48,21 @@ def _credit(db: Session, agent_id: int, holder_addr: str, delta: int) -> None:
         if new_bal < 0:
             new_bal = 0  # defensive — should never happen if events are ordered
         h.balance = str(new_bal)
-    else:
-        db.add(models.Holder(
-            agent_id=agent_id,
-            address=holder_addr,
-            balance=str(max(delta, 0)),
-            weight_bps=0,
-            first_held_at=now,
-            cumulative_dividends_claimed_usdc="0",
-        ))
+        return
+    db.add(models.Holder(
+        agent_id=agent_id,
+        address=holder_addr,
+        balance=str(max(delta, 0)),
+        weight_bps=0,
+        first_held_at=now,
+        cumulative_dividends_claimed_usdc="0",
+    ))
+    # SessionLocal is autoflush=False, so the next Transfer event for the
+    # same (agent_id, holder_addr) within this same chunk would not see this
+    # pending INSERT via db.get() and would add a duplicate — UNIQUE
+    # constraint then aborts the entire chunk on commit. Flushing here keeps
+    # the identity map aligned so consecutive events coalesce.
+    db.flush()
 
 
 def handle_transfer(db: Session, event) -> None:
