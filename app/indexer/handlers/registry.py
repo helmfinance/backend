@@ -30,7 +30,18 @@ def _setup_yield_sources(agent_id: int, mandate_dict: dict) -> None:
     the tier-whitelist bridge above; runs via the executor wallet (which is
     also the harvester's `executor`).
     """
-    universe = mandate_dict.get("targetUniverse", []) or []
+    # Mandate authoring quirk: the LLM populates ``weightConstraints`` with
+    # the per-asset min/max ranges but often leaves ``targetUniverse`` null,
+    # since they encode the same information. Derive the universe from
+    # weightConstraints[].asset when targetUniverse is empty, otherwise
+    # yield-bearing adapters never get wired for valid mandates.
+    universe = mandate_dict.get("targetUniverse") or []
+    if not universe:
+        universe = [
+            c.get("asset")
+            for c in mandate_dict.get("weightConstraints", []) or []
+            if c.get("asset")
+        ]
     sources: list[str] = []
     for sym in universe:
         env_key = _YIELD_SOURCE_BY_SYMBOL.get(sym)
