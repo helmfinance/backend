@@ -136,6 +136,28 @@ def execute(agent_id: int) -> dict:
                 pass
             raise
 
+        # Synchronously refresh positions so the FE detail page reflects the
+        # new allocation on the very next request. The indexer-fed refresh in
+        # handle_rebalanced sometimes loses Position rows to a single failed
+        # web3 call inside the loop (outer except swallows it); calling here
+        # in a fresh session with explicit commit makes the update reliable.
+        try:
+            from app.db.session import SessionLocal
+            from app.indexer.handlers.vault import _refresh_positions
+            from app.indexer.handlers.vault import _snapshot_nav
+            import time as _t
+            with SessionLocal() as fresh_db:
+                agent_fresh = fresh_db.get(models.Agent, agent_id)
+                if agent_fresh:
+                    _refresh_positions(fresh_db, agent_id, agent_fresh.vault_address)
+                    _snapshot_nav(
+                        fresh_db, agent_id, agent_fresh.vault_address,
+                        agent_fresh.token_address, int(_t.time()),
+                    )
+                    fresh_db.commit()
+        except Exception as e:
+            log.warning("[rebalance] post-tx position refresh failed (non-fatal): %s", e)
+
         return {"tx_hash": tx_hash, "targets": abs_targets}
 
 
