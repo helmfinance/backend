@@ -103,7 +103,15 @@ def _refresh_positions(db: Session, agent_id: int, vault_addr: str):
 
             weight_bps = (value * 10_000 // nav_total) if nav_total > 0 else 0
             now_ts = int(time.time())
-            db.add(models.Position(
+            # Two concurrent indexer cycles (APScheduler + a manual tick, or
+            # the post-tx sync in rebalance.py + an in-flight scheduler chunk)
+            # both delete+insert this row, racing on UNIQUE (agent_id,
+            # asset_address). Use ON CONFLICT DO UPDATE so the second writer's
+            # values overwrite the first's — the data is identical anyway, so
+            # last-write-wins is safe and removes the integrity error that
+            # otherwise aborts the entire chunk.
+            from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+            stmt = sqlite_insert(models.Position).values(
                 agent_id=agent_id,
                 asset_address=asset_addr.lower(),
                 symbol=symbol,
@@ -115,7 +123,22 @@ def _refresh_positions(db: Session, agent_id: int, vault_addr: str):
                 price_updated_at=now_ts,
                 price_stale=False,
                 updated_at=now_ts,
-            ))
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["agent_id", "asset_address"],
+                set_={
+                    "symbol": stmt.excluded.symbol,
+                    "asset_class": stmt.excluded.asset_class,
+                    "amount": stmt.excluded.amount,
+                    "value_usdc": stmt.excluded.value_usdc,
+                    "weight_bps": stmt.excluded.weight_bps,
+                    "price_usdc": stmt.excluded.price_usdc,
+                    "price_updated_at": stmt.excluded.price_updated_at,
+                    "price_stale": stmt.excluded.price_stale,
+                    "updated_at": stmt.excluded.updated_at,
+                },
+            )
+            db.execute(stmt)
     except Exception as e:
         print(f"[indexer] _refresh_positions agent={agent_id} skipped: {e}")
 
