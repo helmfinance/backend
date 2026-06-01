@@ -50,7 +50,95 @@ def run(agent_id: int) -> dict:
 
         # 3+4. Stage + distribute.
         stage_tx = send_tx(dist.functions.stageYield(agent_id, amount))["tx_hash"]
-        dist_tx = send_tx(dist.functions.distribute(agent_id))["tx_hash"]
+        dist_result = send_tx(dist.functions.distribute(agent_id))
+        dist_tx = dist_result["tx_hash"]
+
+        # Synchronously decode the Distributed event from the receipt and write
+        # DividendEpoch + DividendClaim + Decision rows. The indexer-fed
+        # handle_distributed sometimes loses these to silent web3 errors during
+        # totalSupply snapshot reads; running it here ensures the FE Portfolio
+        # Dividends tab shows the claimable amount on the very next request.
+        try:
+            import time as _t
+            from sqlalchemy import select
+            receipt = dist_result["receipt"]
+            logs = dist.events.Distributed().process_receipt(receipt)
+            if logs:
+                ev = logs[0]
+                epoch = int(ev["args"]["epoch"])
+                total_amount = int(ev["args"]["totalAmount"])
+                holders_share = int(ev["args"]["holdersShare"])
+                carry_share = int(ev["args"]["carryShare"])
+                block_n = int(ev["blockNumber"])
+                tx_hash = ev["transactionHash"].hex() if hasattr(ev["transactionHash"], "hex") else ev["transactionHash"]
+                log_idx = int(ev["logIndex"])
+                now_ts = int(_t.time())
+
+                # Total supply snapshot (chain read at the dist block).
+                total_shares_snapshot = 0
+                try:
+                    from app.chain.client import agent_token
+                    if agent.token_address:
+                        total_shares_snapshot = int(
+                            agent_token(agent.token_address)
+                            .functions.totalSupply()
+                            .call(block_identifier=block_n)
+                        )
+                except Exception:
+                    pass
+
+                if not db.get(models.DividendEpoch, (agent_id, epoch)):
+                    db.add(models.DividendEpoch(
+                        agent_id=agent_id,
+                        epoch=epoch,
+                        total_amount_usdc=str(total_amount),
+                        holders_share_usdc=str(holders_share),
+                        carry_share_usdc=str(carry_share),
+                        distributed_at=now_ts,
+                        total_shares_at_snapshot=str(total_shares_snapshot),
+                    ))
+
+                if total_shares_snapshot > 0:
+                    holders = list(db.execute(
+                        select(models.Holder).where(models.Holder.agent_id == agent_id)
+                    ).scalars())
+                    for h in holders:
+                        try:
+                            bal = int(h.balance or 0)
+                        except (TypeError, ValueError):
+                            bal = 0
+                        if bal == 0:
+                            continue
+                        pending = bal * holders_share // total_shares_snapshot
+                        if pending == 0:
+                            continue
+                        key = (agent_id, epoch, h.holder_address)
+                        if db.get(models.DividendClaim, key):
+                            continue
+                        db.add(models.DividendClaim(
+                            agent_id=agent_id, epoch=epoch,
+                            holder_address=h.holder_address,
+                            amount_usdc=str(pending),
+                            claimed=False, claimed_at=None,
+                        ))
+
+                decision_id = f"{tx_hash}:{log_idx}"
+                if not db.get(models.Decision, decision_id):
+                    db.add(models.Decision(
+                        id=decision_id, agent_id=agent_id, type="Distribute",
+                        timestamp=now_ts, tx_hash=tx_hash, block_number=block_n,
+                        summary=f"Distributed epoch {epoch}: {total_amount} USDC "
+                                f"({holders_share} holders / {carry_share} carry)",
+                        distributed_epoch=epoch,
+                        distributed_holders_usdc=str(holders_share),
+                        distributed_carry_usdc=str(carry_share),
+                    ))
+                db.commit()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                "[distribute] post-tx event index failed (non-fatal): %s", e,
+            )
 
         return {
             "drain_tx_hash": drain_tx,
