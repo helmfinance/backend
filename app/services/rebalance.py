@@ -73,9 +73,14 @@ def execute(agent_id: int) -> dict:
         # rebalance hits InsufficientCash on the fee payment.
         usdc_balance = nav * (10_000 - fee_bps - 100) // 10_000
 
-        # 2) Refresh Pyth feeds for synthetic targets BEFORE asking SyntheticAsset
-        # for priceUSDC (else `getPriceUsdc` reverts with PriceStale).
-        feed_ids = _collect_feed_ids(weight_targets)
+        # 2) Refresh Pyth feeds. We refresh ALL deployed synthetic feeds, not
+        # just the ones in this agent's mandate — AgentVault.executeRebalance
+        # internally references the system-wide synthetic universe (e.g. for
+        # invariant checks / benchmark pricing), and stale feeds for assets
+        # OUTSIDE this agent's targets still revert the entire tx with
+        # PriceStale. Cheap to update them all; expensive to debug a partial
+        # refresh.
+        feed_ids = _collect_all_synthetic_feed_ids()
         if feed_ids:
             _refresh_pyth(feed_ids)
 
@@ -198,6 +203,32 @@ def _collect_feed_ids(weight_targets: list[tuple[str, int]]) -> list[str]:
         asset_addr = _symbol_to_address(symbol)
         try:
             fid = contract_at("SyntheticAsset", asset_addr).functions.pythFeedId().call()
+            feed_ids.append("0x" + fid.hex())
+        except Exception:
+            continue
+    return feed_ids
+
+
+def _collect_all_synthetic_feed_ids() -> list[str]:
+    """Return pythFeedId for every deployed SyntheticAsset (sNVDA, sSPY,
+    sAAPL, sTSLA, sMSFT), independent of the calling agent's mandate.
+
+    AgentVault.executeRebalance touches the system-wide synthetic registry
+    during invariant checks; any deployed synthetic with a stale Pyth feed
+    can revert a rebalance even if it isn't in the current agent's targets.
+    Refreshing the full set is the smallest defensive change that keeps the
+    rebalance robust against staleness on neighbors.
+    """
+    from app.config import settings
+    feed_ids: list[str] = []
+    for env_key in ("snvda", "sspy", "saapl", "stsla", "smsft"):
+        addr = getattr(settings, env_key, None)
+        if not addr:
+            continue
+        try:
+            fid = contract_at(
+                "SyntheticAsset", Web3.to_checksum_address(addr),
+            ).functions.pythFeedId().call()
             feed_ids.append("0x" + fid.hex())
         except Exception:
             continue
