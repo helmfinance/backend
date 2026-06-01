@@ -145,48 +145,32 @@ def handle_yield_deposited(db: Session, event):
 
 
 def handle_deposit(db: Session, event):
-    """ERC-4626 Deposit(sender, owner, assets, shares). Update Holder + NAV snapshot."""
-    args = event["args"]
+    """ERC-4626 Deposit. NAV snapshot only — Holder rows are owned by the
+    AgentToken Transfer handler.
+
+    The Deposit event's ``owner`` is the public-mint entrypoint contract on
+    the launch path (it receives the shares, then forwards them to the real
+    user via a separate ERC-20 Transfer). Using it as the Holder.address
+    poisoned the DB with entrypoint rows that never matched real wallets,
+    so DividendDistributor seeding produced 0 claims. Transfer is the
+    authoritative signal for share custody and lives in
+    ``handlers.agent_token``.
+    """
     vault_addr = event["address"].lower()
     agent = _find_agent_by_vault(db, vault_addr)
     if not agent:
         return
-
-    owner = args["owner"].lower()
-    shares = args["shares"]
-
-    holder = db.get(models.Holder, (agent.agent_id, owner))
-    now = int(time.time())
-    if holder:
-        holder.balance = str(int(holder.balance) + shares)
-    else:
-        db.add(models.Holder(
-            agent_id=agent.agent_id,
-            address=owner,
-            balance=str(shares),
-            weight_bps=0,
-            first_held_at=now,
-            cumulative_dividends_claimed_usdc="0",
-        ))
-
-    _snapshot_nav(db, agent.agent_id, vault_addr, agent.token_address, now)
+    _snapshot_nav(db, agent.agent_id, vault_addr, agent.token_address, int(time.time()))
 
 
 def handle_withdraw(db: Session, event):
-    """ERC-4626 Withdraw(sender, receiver, owner, assets, shares)."""
-    args = event["args"]
+    """ERC-4626 Withdraw. NAV snapshot only — Holder mutation is handled by
+    AgentToken Transfer (burn → from=user, to=0x0).
+    """
     vault_addr = event["address"].lower()
     agent = _find_agent_by_vault(db, vault_addr)
     if not agent:
         return
-
-    owner = args["owner"].lower()
-    shares = args["shares"]
-    holder = db.get(models.Holder, (agent.agent_id, owner))
-    if holder:
-        new_bal = max(0, int(holder.balance) - shares)
-        holder.balance = str(new_bal)
-
     _snapshot_nav(db, agent.agent_id, vault_addr, agent.token_address, int(time.time()))
 
 
