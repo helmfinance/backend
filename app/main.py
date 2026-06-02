@@ -113,8 +113,37 @@ async def lifespan(app: FastAPI):
         seconds=settings.indexer_poll_seconds,
         id="indexer",
     )
+
+    # AgentVault.deposit / mint / totalAssets all internally call Pyth via
+    # the synthetic + mETH adapter price paths, which revert with PriceStale
+    # whenever a feed's on-chain publishTime is older than 60s. The FE's
+    # mint-flow "update Pyth" step only refreshes the agent's mandate
+    # feeds, so ETH/USD (used by the mETH adapter) goes stale within a
+    # minute of activity and breaks every subsequent user-driven mint /
+    # refresh-positions / totalAssets call. Keeping a 30s system-wide
+    # refresh in the BE scheduler means users see a fresh-feed window
+    # whenever they click anything in the UI.
+    def _refresh_system_pyth():
+        try:
+            from app.services.rebalance import (
+                _collect_all_synthetic_feed_ids, _refresh_pyth,
+            )
+            ids = _collect_all_synthetic_feed_ids()
+            if ids:
+                _refresh_pyth(ids)
+        except Exception as e:  # noqa: BLE001
+            print(f"[pyth-cron] refresh failed: {e}")
+
+    scheduler.add_job(
+        _refresh_system_pyth,
+        "interval",
+        seconds=30,
+        id="pyth-refresh",
+    )
+
     scheduler.start()
     print(f"[indexer] started, poll={settings.indexer_poll_seconds}s")
+    print("[pyth-cron] started, refresh=30s")
     try:
         yield
     finally:
