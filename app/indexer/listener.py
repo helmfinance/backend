@@ -9,12 +9,15 @@ from app.indexer.state import get_last_synced, set_last_synced
 CONFIRMATIONS = 6
 CHUNK_SIZE = settings.indexer_chunk_blocks
 
-# Phase 5 contracts deployed at block 39,260,530. For the hackathon demo we
-# anchor near the most recent register event so a DB wipe replay is fast
-# (~hundreds of blocks vs ~120k from deploy). Orphan agents from pre-anchor
-# blocks are intentionally left behind. Bump this number when registering a
-# new "demo agent" on a fresh chain state.
-BOOTSTRAP_BLOCK = 39_382_900
+# Phase 5 contracts deployed at block 39,260,530. We anchor PAST every
+# previously-registered demo agent on purpose — those had placeholder
+# mandate bodies (the FE's IPFS pin URI is ``ipfs://local-...`` so DB wipes
+# permanently lost the MandateBlob rows, and the indexer can't recover the
+# real body) and were polluting the marketplace as "Agent #N / $AGT"
+# cards. Anything before this block is intentionally invisible to the BE;
+# any agent registered AFTER this block indexes normally. Bump whenever
+# you want a clean demo slate.
+BOOTSTRAP_BLOCK = 39_397_500
 
 
 def run_one_cycle():
