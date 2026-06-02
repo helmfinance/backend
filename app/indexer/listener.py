@@ -17,7 +17,7 @@ CHUNK_SIZE = settings.indexer_chunk_blocks
 # cards. Anything before this block is intentionally invisible to the BE;
 # any agent registered AFTER this block indexes normally. Bump whenever
 # you want a clean demo slate.
-BOOTSTRAP_BLOCK = 39_418_000
+BOOTSTRAP_BLOCK = 39_423_000
 
 
 def run_one_cycle():
