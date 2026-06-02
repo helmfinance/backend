@@ -75,17 +75,31 @@ def run(agent_id: int) -> dict:
                 now_ts = int(_t.time())
 
                 # Total supply snapshot (chain read at the dist block).
+                # Mantle Sepolia's public RPC frequently rejects historical
+                # eth_calls with archive-node errors, so fall back to the
+                # latest-block read. Distribute is the only writer that moves
+                # supply, and it runs sequentially per agent, so latest
+                # totalSupply equals snapshot-at-dist-block for our purposes.
                 total_shares_snapshot = 0
-                try:
+                if agent.token_address:
                     from app.chain.client import agent_token
-                    if agent.token_address:
+                    token = agent_token(agent.token_address)
+                    try:
                         total_shares_snapshot = int(
-                            agent_token(agent.token_address)
-                            .functions.totalSupply()
+                            token.functions.totalSupply()
                             .call(block_identifier=block_n)
                         )
-                except Exception:
-                    pass
+                    except Exception:
+                        try:
+                            total_shares_snapshot = int(
+                                token.functions.totalSupply().call()
+                            )
+                        except Exception as ts_err:
+                            import logging
+                            logging.getLogger(__name__).warning(
+                                "[distribute] totalSupply read failed for "
+                                "agent %s: %s", agent_id, ts_err,
+                            )
 
                 if not db.get(models.DividendEpoch, (agent_id, epoch)):
                     db.add(models.DividendEpoch(

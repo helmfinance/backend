@@ -40,17 +40,28 @@ def handle_distributed(db: Session, event) -> None:
     # so claim-amount math works without a chain round-trip from the portfolio
     # endpoint.
     total_shares_snapshot = 0
-    try:
-        from app.chain.client import agent_token, get_w3
-        agent = db.get(models.Agent, agent_id)
-        if agent and agent.token_address:
+    from app.chain.client import agent_token
+    agent = db.get(models.Agent, agent_id)
+    if agent and agent.token_address:
+        token = agent_token(agent.token_address)
+        try:
             total_shares_snapshot = int(
-                agent_token(agent.token_address)
-                .functions.totalSupply()
+                token.functions.totalSupply()
                 .call(block_identifier=int(event["blockNumber"]))
             )
-    except Exception as e:
-        print(f"[indexer] handle_distributed snapshot supply read failed: {e}")
+        except Exception:
+            # Mantle public RPC often refuses historical eth_call. Latest
+            # totalSupply is the same value as long as no other distribute
+            # ran between this block and now (we serialize per agent).
+            try:
+                total_shares_snapshot = int(
+                    token.functions.totalSupply().call()
+                )
+            except Exception as ts_err:
+                print(
+                    f"[indexer] handle_distributed totalSupply read failed: "
+                    f"{ts_err}"
+                )
 
     db.add(models.DividendEpoch(
         agent_id=agent_id,
