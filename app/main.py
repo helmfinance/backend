@@ -1760,6 +1760,62 @@ def debug_distribute_state(agent_id: int, response: Response) -> dict:
     return out
 
 
+@app.get(
+    "/admin/debug/try-distribute/{agent_id}",
+    summary="Simulate distribute(agentId) via eth_call to capture revert reason",
+    tags=["admin"],
+)
+def debug_try_distribute(agent_id: int, response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    from app.chain.client import dividend_distributor
+    from app.chain.executor_wallet import address as executor_address
+
+    out: dict = {"agentId": agent_id}
+    dist = dividend_distributor()
+    exec_addr = executor_address()
+
+    # eth_call doesn't send a tx — it executes the call locally on the node
+    # and returns the result or revert reason. Same code path as a real tx
+    # but no state change, no gas spent.
+    try:
+        result = dist.functions.distribute(agent_id).call({"from": exec_addr})
+        out["status"] = "would-succeed"
+        out["epoch"] = int(result)
+    except Exception as e:
+        out["status"] = "would-revert"
+        out["error"] = str(e)
+        # Try to extract the revert reason — web3 wraps it in ContractLogicError
+        out["errorType"] = type(e).__name__
+        if hasattr(e, "data"):
+            out["errorData"] = str(e.data)[:300]
+
+    # Also check founderVault.distributor field — common misconfiguration
+    try:
+        from app.chain.abi_loader import load_abi
+        from app.chain.client import get_w3
+        from app.db.models import Agent
+
+        with SessionLocal() as db:
+            agent = db.get(Agent, agent_id)
+        if agent and agent.founder_vault_address:
+            w3 = get_w3()
+            fv = w3.eth.contract(
+                address=w3.to_checksum_address(agent.founder_vault_address),
+                abi=load_abi("FounderVault"),
+            )
+            fv_distributor = fv.functions.distributor().call()
+            out["founderVaultDistributor"] = fv_distributor
+            out["expectedDistributor"] = dist.address
+            out["distributorMatches"] = (
+                fv_distributor.lower() == dist.address.lower()
+            )
+    except Exception as e:
+        out["founderVaultCheckError"] = str(e)[:200]
+
+    return out
+
+
 def _qualification_to_response(agent_id: int, result: dict) -> QualificationResponse:
     return QualificationResponse(
         agent_id=agent_id,
@@ -1857,4 +1913,4 @@ def health(response: Response) -> dict:
     except Exception:
         chain_ok = False
 
-    return {"ok": True, "db": True, "chain": chain_ok, "build": "DIAG_DISTRIBUTE"}
+    return {"ok": True, "db": True, "chain": chain_ok, "build": "TRY_DISTRIBUTE"}
