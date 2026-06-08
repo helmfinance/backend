@@ -50,7 +50,27 @@ def run(agent_id: int) -> dict:
 
         # 3+4. Stage + distribute.
         stage_tx = send_tx(dist.functions.stageYield(agent_id, amount))["tx_hash"]
-        dist_result = send_tx(dist.functions.distribute(agent_id))
+        # Mantle Sepolia sequencer occasionally silent-drops the trailing tx of
+        # a multi-tx burst (drain+approve+stage+distribute all from the same
+        # signer in rapid succession). distribute() is most affected because
+        # it's last. Retry up to 3 times with a small pause when the receipt
+        # times out — eth_call simulation proves the contract state is fine
+        # at this point, so a re-submission almost always succeeds.
+        import time as _time
+        dist_result = None
+        last_err: Exception | None = None
+        for attempt in range(3):
+            try:
+                dist_result = send_tx(
+                    dist.functions.distribute(agent_id), gas=1_000_000,
+                )
+                break
+            except TimeoutError as e:
+                last_err = e
+                _time.sleep(3)
+                continue
+        if dist_result is None:
+            raise last_err or RuntimeError("distribute() retries exhausted")
         dist_tx = dist_result["tx_hash"]
 
         # Synchronously decode the Distributed event from the receipt and write

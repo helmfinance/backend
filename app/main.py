@@ -1942,4 +1942,4 @@ def health(response: Response) -> dict:
     except Exception:
         chain_ok = False
 
-    return {"ok": True, "db": True, "chain": chain_ok, "build": "DIST_ONLY"}
+    return {"ok": True, "db": True, "chain": chain_ok, "build": "DIST_HEAL"}
