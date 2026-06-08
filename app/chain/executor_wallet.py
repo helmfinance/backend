@@ -12,7 +12,7 @@ from app.config import settings
 # we parse the RPC's expected nonce out of the error string and re-sign.
 GAS_PRICE_MULTIPLIER = 1.2
 GAS_PRICE_RETRY_MULTIPLIER = 1.5
-RECEIPT_TIMEOUT = 60
+RECEIPT_TIMEOUT = 300
 MAX_RETRIES = 3
 # Geth/Erigon-style sequencer error: "nonce too low: next nonce 55, tx nonce 54"
 NONCE_RE = re.compile(r"next nonce (\d+)")
