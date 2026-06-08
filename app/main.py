@@ -1760,6 +1760,35 @@ def debug_distribute_state(agent_id: int, response: Response) -> dict:
     return out
 
 
+@app.post(
+    "/admin/agents/{agent_id}/distribute-only",
+    summary="Call DividendDistributor.distribute(agentId) standalone — recovery for stuck distribute flow where stage succeeded but distribute() was silent-dropped by the sequencer",
+    tags=["admin"],
+)
+def admin_distribute_only(agent_id: int, response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    from app.chain.client import dividend_distributor
+    from app.chain.executor_wallet import send_tx
+
+    dist = dividend_distributor()
+    try:
+        result = send_tx(dist.functions.distribute(agent_id), gas=1_000_000)
+    except Exception as e:
+        raise HTTPException(503, detail=ApiError(
+            error=ApiErrorCode.ChainUnreachable,
+            message=f"distribute-only failed: {e}",
+        ).model_dump(by_alias=True)) from e
+
+    return {
+        "agentId": agent_id,
+        "txHash": result["tx_hash"],
+        "blockNumber": result["block_number"],
+        "gasUsed": result["gas_used"],
+        "status": result["status"],
+    }
+
+
 @app.get(
     "/admin/debug/try-distribute/{agent_id}",
     summary="Simulate distribute(agentId) via eth_call to capture revert reason",
@@ -1913,4 +1942,4 @@ def health(response: Response) -> dict:
     except Exception:
         chain_ok = False
 
-    return {"ok": True, "db": True, "chain": chain_ok, "build": "TRY_DISTRIBUTE"}
+    return {"ok": True, "db": True, "chain": chain_ok, "build": "DIST_ONLY"}
