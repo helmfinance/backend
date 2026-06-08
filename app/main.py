@@ -1749,4 +1749,4 @@ def health(response: Response) -> dict:
     except Exception:
         chain_ok = False
 
-    return {"ok": True, "db": True, "chain": chain_ok, "build": "MEMOIZE_V1"}
+    return {"ok": True, "db": True, "chain": chain_ok, "build": "TIMEOUT_300"}
