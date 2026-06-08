@@ -1652,6 +1652,114 @@ def debug_redemption_queue(agent_id: int, response: Response) -> dict:
     }
 
 
+@app.get(
+    "/admin/debug/distribute-state/{agent_id}",
+    summary="Diagnose where the distribute flow is stuck for an agent",
+    tags=["admin"],
+)
+def debug_distribute_state(agent_id: int, response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    _check_testnet()
+    from app.chain.client import (
+        agent_vault, dividend_distributor, get_w3, usdc as usdc_contract,
+    )
+    from app.chain.executor_wallet import address as executor_address
+    from app.db.models import Agent
+
+    w3 = get_w3()
+    out: dict = {"agentId": agent_id}
+
+    # 1. Executor wallet state — MNT balance, nonces (latest vs pending detects stuck tx)
+    exec_addr = executor_address()
+    try:
+        latest_nonce = w3.eth.get_transaction_count(exec_addr, "latest")
+        pending_nonce = w3.eth.get_transaction_count(exec_addr, "pending")
+        mnt_balance = w3.eth.get_balance(exec_addr)
+        out["executor"] = {
+            "address": exec_addr,
+            "mntBalanceWei": str(mnt_balance),
+            "mntBalance": mnt_balance / 1e18,
+            "latestNonce": latest_nonce,
+            "pendingNonce": pending_nonce,
+            "stuckTxCount": pending_nonce - latest_nonce,
+        }
+    except Exception as e:
+        out["executor"] = {"error": str(e)[:200]}
+
+    # 2. Executor USDC balance — if drain succeeded but stage didn't, USDC sits here
+    try:
+        u = usdc_contract()
+        usdc_bal = u.functions.balanceOf(exec_addr).call()
+        out["executorUsdcBalance"] = str(usdc_bal)
+    except Exception as e:
+        out["executorUsdcBalance"] = f"error: {e}"[:200]
+
+    # 3. DividendDistributor state — staged & per-agent epoch progression
+    try:
+        dist = dividend_distributor()
+        dist_addr = dist.address
+        u = usdc_contract()
+        dist_usdc = u.functions.balanceOf(dist_addr).call()
+        epoch_of = int(dist.functions.epochOf(agent_id).call())
+        snapshot = None
+        if epoch_of > 0:
+            snap = dist.functions.epochSnapshot(agent_id, epoch_of).call()
+            snapshot = {
+                "totalAmount": str(snap[0]),
+                "holdersShare": str(snap[1]),
+                "totalSharesAtSnapshot": str(snap[2]),
+                "timestamp": snap[3],
+            }
+        out["distributor"] = {
+            "address": dist_addr,
+            "totalUsdcHeld": str(dist_usdc),
+            "epochOf": epoch_of,
+            "latestEpochSnapshot": snapshot,
+        }
+    except Exception as e:
+        out["distributor"] = {"error": str(e)[:200]}
+
+    # 4. Vault yieldPool — confirms drain ran (vault → executor)
+    try:
+        with SessionLocal() as db:
+            agent = db.get(Agent, agent_id)
+        if agent and agent.vault_address:
+            v = agent_vault(agent.vault_address)
+            yp = int(v.functions.yieldPool().call())
+            out["vault"] = {
+                "address": agent.vault_address,
+                "yieldPool": str(yp),
+            }
+        else:
+            out["vault"] = {"error": "agent not found or no vault address"}
+    except Exception as e:
+        out["vault"] = {"error": str(e)[:200]}
+
+    # 5. Diagnosis hint based on observed state
+    hints = []
+    if out.get("executor", {}).get("stuckTxCount", 0) > 0:
+        hints.append(
+            f"executor has {out['executor']['stuckTxCount']} stuck pending tx — "
+            f"mempool tx with old nonce blocking new submissions"
+        )
+    if out.get("vault", {}).get("yieldPool") == "0" and out.get("distributor", {}).get("epochOf") == 0:
+        hints.append(
+            "drain ran (yieldPool=0) but no epoch ever distributed for this agent "
+            "— stage may have succeeded but distribute() never finalized on chain"
+        )
+    try:
+        exec_usdc = int(out.get("executorUsdcBalance", "0"))
+        if exec_usdc > 0:
+            hints.append(
+                f"executor holding {exec_usdc} USDC — drain succeeded but stage did not pull it"
+            )
+    except (ValueError, TypeError):
+        pass
+    out["hints"] = hints
+
+    return out
+
+
 def _qualification_to_response(agent_id: int, result: dict) -> QualificationResponse:
     return QualificationResponse(
         agent_id=agent_id,
@@ -1749,4 +1857,4 @@ def health(response: Response) -> dict:
     except Exception:
         chain_ok = False
 
-    return {"ok": True, "db": True, "chain": chain_ok, "build": "TIMEOUT_300"}
+    return {"ok": True, "db": True, "chain": chain_ok, "build": "DIAG_DISTRIBUTE"}
